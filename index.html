@@ -51,10 +51,17 @@
         function App() {
             // Estados Principales
             const [orders, setOrders] = useState([]);
-            const [clientsList, setClientsList] = useState([]); // <- Nueva base de datos de Clientes
+            const [clientsList, setClientsList] = useState([]);
             const [user, setUser] = useState(null);
-            const [loadingData, setLoadingData] = useState(true);
+            const [authChecking, setAuthChecking] = useState(true);
+            const [loadingData, setLoadingData] = useState(false);
             
+            // Estados de Login
+            const [authEmail, setAuthEmail] = useState('');
+            const [authPassword, setAuthPassword] = useState('');
+            const [isRegistering, setIsRegistering] = useState(false);
+            const [authError, setAuthError] = useState('');
+
             const [modal, setModal] = useState({ isOpen: false, type: '', message: '', data: null, actionType: '' });
 
             const [view, setView] = useState('dashboard');
@@ -65,32 +72,37 @@
             const [statusFilter, setStatusFilter] = useState('Todos');
             const [showFinances, setShowFinances] = useState(true);
             const [financeClientFilter, setFinanceClientFilter] = useState('Todos');
-            const [dashboardClientFilter, setDashboardClientFilter] = useState('Todos'); // Filtro para el Dashboard
-            const [ordersClientFilter, setOrdersClientFilter] = useState('Todos'); // Filtro para Órdenes
+            const [dashboardClientFilter, setDashboardClientFilter] = useState('Todos');
+            const [ordersClientFilter, setOrdersClientFilter] = useState('Todos');
+            const [dashboardServiceFilter, setDashboardServiceFilter] = useState('Todos');
+            const [financeToPrint, setFinanceToPrint] = useState(null);
 
             // Formularios
             const [formData, setFormData] = useState({
                 cliente: '', empresa: '', telefono: '', servicio: '', extras: '',
-                costoTotal: '', depositos: [], estado: 'Pendiente', imagenes: []
+                costoTotal: '', depositos: [], estado: 'Pendiente', imagenes: [],
+                fechaSolicitud: new Date().toISOString().split('T')[0],
+                tipoServicio: 'Diseños'
             });
 
             const [clientFormData, setClientFormData] = useState({
                 nombre: '', telefono: '', empresas: ['']
             });
 
-            // 1. Autenticación
+            // 1. Control de Autenticación
             useEffect(() => {
-                auth.signInAnonymously().catch(error => console.error("Error de autenticación:", error));
-                const unsubscribe = auth.onAuthStateChanged((currentUser) => setUser(currentUser));
+                const unsubscribe = auth.onAuthStateChanged((currentUser) => {
+                    setUser(currentUser);
+                    setAuthChecking(false);
+                });
                 return () => unsubscribe();
             }, []);
 
-            // 2. Cargar datos desde Firestore (Órdenes y Clientes)
+            // 2. Cargar datos desde Firestore
             useEffect(() => {
                 if (!user) return;
                 setLoadingData(true);
                 
-                // Cargar Órdenes
                 const ordersRef = db.collection('artifacts').doc(appId).collection('users').doc(user.uid).collection('orders');
                 const unsubscribeOrders = ordersRef.onSnapshot((snapshot) => {
                     const fetchedOrders = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
@@ -98,11 +110,9 @@
                     setOrders(fetchedOrders);
                 }, (error) => console.error(error));
 
-                // Cargar Clientes
                 const clientsRef = db.collection('artifacts').doc(appId).collection('users').doc(user.uid).collection('clients');
                 const unsubscribeClients = clientsRef.onSnapshot((snapshot) => {
                     const fetchedClients = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-                    // Ordenar clientes alfabéticamente
                     fetchedClients.sort((a, b) => a.nombre.localeCompare(b.nombre));
                     setClientsList(fetchedClients);
                     setLoadingData(false);
@@ -117,6 +127,25 @@
                 };
             }, [user]);
 
+            // --- Manejador de Login/Registro ---
+            const handleAuth = async (e) => {
+                e.preventDefault();
+                setAuthError('');
+                try {
+                    if (isRegistering) {
+                        await auth.createUserWithEmailAndPassword(authEmail, authPassword);
+                    } else {
+                        await auth.signInWithEmailAndPassword(authEmail, authPassword);
+                    }
+                } catch (error) {
+                    if (error.code === 'auth/email-already-in-use') setAuthError('Este correo ya está registrado.');
+                    else if (error.code === 'auth/wrong-password' || error.code === 'auth/invalid-credential') setAuthError('Correo o contraseña incorrectos.');
+                    else if (error.code === 'auth/user-not-found') setAuthError('Usuario no encontrado.');
+                    else if (error.code === 'auth/weak-password') setAuthError('La contraseña debe tener al menos 6 caracteres.');
+                    else setAuthError('Ocurrió un error. Intenta de nuevo.');
+                }
+            };
+
             // --- Cálculos y Estadísticas ---
             const stats = useMemo(() => {
                 const clientsCount = clientsList.length;
@@ -128,7 +157,6 @@
                 return { clientsCount, activeCount, completedCount, cancelledCount, totalRevenue, pendingMoney };
             }, [orders, clientsList]);
 
-            // Unir datos de clientes con sus órdenes
             const clientsWithStats = useMemo(() => {
                 return clientsList.map(client => {
                     const clientOrders = orders.filter(o => o.cliente === client.nombre);
@@ -138,14 +166,15 @@
                 });
             }, [clientsList, orders]);
 
-            // --- Navegación ---
             const goTo = (newView) => { setView(newView); setSearchTerm(''); };
 
             // --- Manejadores de ÓRDENES ---
             const handleNewOrder = () => {
                 setFormData({
                     cliente: '', empresa: '', telefono: '', servicio: '', extras: '', costoTotal: '',
-                    depositos: [], estado: 'Pendiente', imagenes: []
+                    depositos: [], estado: 'Pendiente', imagenes: [],
+                    fechaSolicitud: new Date().toISOString().split('T')[0],
+                    tipoServicio: 'Diseños'
                 });
                 setEditingId(null);
                 goTo('form');
@@ -159,16 +188,9 @@
 
             const handleChangeOrder = (e) => {
                 const { name, value } = e.target;
-                
-                // Si cambian el cliente, auto-llenamos el teléfono y reseteamos la empresa
                 if (name === 'cliente') {
                     const selectedClient = clientsList.find(c => c.nombre === value);
-                    setFormData(prev => ({ 
-                        ...prev, 
-                        cliente: value, 
-                        empresa: '', 
-                        telefono: selectedClient ? selectedClient.telefono : prev.telefono 
-                    }));
+                    setFormData(prev => ({ ...prev, cliente: value, empresa: '', telefono: selectedClient ? selectedClient.telefono : prev.telefono }));
                 } else {
                     setFormData(prev => ({ ...prev, [name]: value }));
                 }
@@ -180,14 +202,8 @@
                     setModal({ isOpen: true, type: 'alert', message: 'Por favor, llena los campos obligatorios.' }); 
                     return;
                 }
-                if (!user) return;
-
                 const totalAdelanto = (formData.depositos || []).reduce((sum, dep) => sum + (parseFloat(dep.monto) || 0), 0);
-                const orderData = {
-                    ...formData,
-                    costoTotal: parseFloat(formData.costoTotal) || 0,
-                    adelanto: totalAdelanto,
-                };
+                const orderData = { ...formData, costoTotal: parseFloat(formData.costoTotal) || 0, adelanto: totalAdelanto };
 
                 try {
                     const newId = editingId || `ORD-${Math.floor(Math.random() * 10000).toString().padStart(4, '0')}`;
@@ -206,11 +222,7 @@
             };
 
             const handleEditClient = (client) => {
-                setClientFormData({
-                    nombre: client.nombre,
-                    telefono: client.telefono || '',
-                    empresas: client.empresas && client.empresas.length > 0 ? client.empresas : ['']
-                });
+                setClientFormData({ nombre: client.nombre, telefono: client.telefono || '', empresas: client.empresas && client.empresas.length > 0 ? client.empresas : [''] });
                 setEditingId(client.id);
                 goTo('client-form');
             };
@@ -220,52 +232,30 @@
                 setClientFormData(prev => ({ ...prev, [name]: value }));
             };
 
-            const handleAddEmpresa = () => {
-                setClientFormData(prev => ({ ...prev, empresas: [...prev.empresas, ''] }));
-            };
-
+            const handleAddEmpresa = () => setClientFormData(prev => ({ ...prev, empresas: [...prev.empresas, ''] }));
             const handleEmpresaChange = (index, value) => {
                 const newEmpresas = [...clientFormData.empresas];
                 newEmpresas[index] = value;
                 setClientFormData(prev => ({ ...prev, empresas: newEmpresas }));
             };
-
-            const handleRemoveEmpresa = (index) => {
-                setClientFormData(prev => ({ ...prev, empresas: prev.empresas.filter((_, i) => i !== index) }));
-            };
+            const handleRemoveEmpresa = (index) => setClientFormData(prev => ({ ...prev, empresas: prev.empresas.filter((_, i) => i !== index) }));
 
             const handleSaveClient = async (e) => {
                 e.preventDefault();
-                if (!clientFormData.nombre) {
-                    setModal({ isOpen: true, type: 'alert', message: 'El nombre del cliente es obligatorio.' }); 
-                    return;
-                }
-                if (!user) return;
-
-                // Limpiar empresas vacías
+                if (!clientFormData.nombre) { setModal({ isOpen: true, type: 'alert', message: 'El nombre es obligatorio.' }); return; }
                 const cleanEmpresas = clientFormData.empresas.filter(emp => emp.trim() !== '');
-
-                const clientData = {
-                    nombre: clientFormData.nombre,
-                    telefono: clientFormData.telefono,
-                    empresas: cleanEmpresas
-                };
+                const clientData = { nombre: clientFormData.nombre, telefono: clientFormData.telefono, empresas: cleanEmpresas };
 
                 try {
                     const newId = editingId || `CLI-${Math.floor(Math.random() * 10000).toString().padStart(4, '0')}`;
                     await db.collection('artifacts').doc(appId).collection('users').doc(user.uid).collection('clients').doc(newId).set({ ...clientData, id: newId });
                     goTo('clients');
-                } catch (error) {
-                    setModal({ isOpen: true, type: 'alert', message: 'Ocurrió un error al guardar el cliente.' });
-                }
+                } catch (error) { setModal({ isOpen: true, type: 'alert', message: 'Error al guardar.' }); }
             };
 
-            // --- ELIMINAR REGISTROS ---
+            // --- ELIMINAR ---
             const requestDelete = (type, id) => {
-                const message = type === 'order' 
-                    ? '¿Estás seguro de que deseas eliminar esta orden?'
-                    : '¿Estás seguro de que deseas eliminar a este cliente? Sus órdenes asociadas no se borrarán, pero perderán el vínculo con sus empresas.';
-                
+                const message = type === 'order' ? '¿Deseas eliminar esta orden?' : '¿Deseas eliminar a este cliente?';
                 setModal({ isOpen: true, type: 'confirm', message, data: id, actionType: type });
             };
 
@@ -274,21 +264,14 @@
                     try {
                         const collectionName = modal.actionType === 'order' ? 'orders' : 'clients';
                         await db.collection('artifacts').doc(appId).collection('users').doc(user.uid).collection(collectionName).doc(modal.data).delete();
-                    } catch (error) {
-                        setModal({ isOpen: true, type: 'alert', message: 'Hubo un problema al eliminar el registro.' });
-                        return;
-                    }
+                    } catch (error) {}
                 }
                 setModal({ isOpen: false, type: '', message: '', data: null, actionType: '' });
             };
 
-            // --- Otros Manejadores ---
-            const handlePrint = (client) => {
-                setClientToPrint(client);
-                setTimeout(() => { window.print(); setClientToPrint(null); }, 500);
-            };
+            const handlePrint = (client) => { setClientToPrint(client); setTimeout(() => { window.print(); setClientToPrint(null); }, 500); };
 
-            // Helpers de Depósitos e Imágenes
+            // Depósitos e Imágenes
             const handleAddDeposito = () => setFormData(prev => ({...prev, depositos: [...(prev.depositos || []), { monto: '', fecha: new Date().toISOString().split('T')[0] }]}));
             const handleDepositoChange = (index, field, value) => {
                 const newDepositos = [...(formData.depositos || [])];
@@ -296,7 +279,6 @@
                 setFormData(prev => ({ ...prev, depositos: newDepositos }));
             };
             const handleRemoveDeposito = (index) => setFormData(prev => ({ ...prev, depositos: (prev.depositos || []).filter((_, i) => i !== index) }));
-            
             const handleImageUpload = (e) => {
                 const files = Array.from(e.target.files);
                 Promise.all(files.map(file => {
@@ -310,30 +292,82 @@
             };
             const removeImage = (index) => setFormData(prev => ({ ...prev, imagenes: prev.imagenes.filter((_, i) => i !== index) }));
 
-            // --- Filtros ---
             const filteredOrders = orders.filter(o => 
                 (statusFilter === 'Todos' || o.estado === statusFilter) &&
                 (ordersClientFilter === 'Todos' || o.cliente === ordersClientFilter) &&
-                (o.cliente.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                o.servicio.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                o.id.toLowerCase().includes(searchTerm.toLowerCase()))
+                (o.cliente.toLowerCase().includes(searchTerm.toLowerCase()) || o.servicio.toLowerCase().includes(searchTerm.toLowerCase()) || o.id.toLowerCase().includes(searchTerm.toLowerCase()))
             );
 
-            const filteredClients = clientsWithStats.filter(c => 
-                c.nombre.toLowerCase().includes(searchTerm.toLowerCase())
-            );
-
+            const filteredClients = clientsWithStats.filter(c => c.nombre.toLowerCase().includes(searchTerm.toLowerCase()));
             const formTotalAdelanto = (formData.depositos || []).reduce((sum, dep) => sum + (parseFloat(dep.monto) || 0), 0);
-
-            // Determinar empresas del cliente seleccionado (Para el formulario de órdenes)
             const selectedClientData = clientsList.find(c => c.nombre === formData.cliente);
             const clientCompanies = selectedClientData?.empresas || [];
 
-            if (loadingData) {
+            // Opciones y lógica de filtrado para Finanzas (Cliente + Empresa)
+            const financeFilterOptions = useMemo(() => {
+                const options = new Set();
+                orders.forEach(o => {
+                    if (o.cliente) options.add(o.cliente);
+                    if (o.cliente && o.empresa) options.add(`${o.cliente} - ${o.empresa}`);
+                });
+                return Array.from(options).sort();
+            }, [orders]);
+
+            const isFinanceMatch = (o) => {
+                if (financeClientFilter === 'Todos') return true;
+                if (financeClientFilter.includes(' - ')) {
+                    const [cName, cEmp] = financeClientFilter.split(' - ');
+                    return o.cliente === cName && o.empresa === cEmp;
+                }
+                return o.cliente === financeClientFilter;
+            };
+
+            const handlePrintFinance = () => {
+                setFinanceToPrint(true);
+                setTimeout(() => { window.print(); setFinanceToPrint(null); }, 500);
+            };
+
+            // PANTALLA DE CARGA INICIAL
+            if (authChecking) {
                 return (
                     <div className="min-h-screen bg-slate-50 flex flex-col items-center justify-center text-indigo-600">
                         <i className="fa-solid fa-spinner fa-spin mb-4 text-5xl"></i>
-                        <p className="font-medium text-slate-600">Conectando con tu base de datos...</p>
+                    </div>
+                );
+            }
+
+            // PANTALLA DE LOGIN
+            if (!user) {
+                return (
+                    <div className="min-h-screen bg-slate-100 flex items-center justify-center p-4 relative overflow-hidden">
+                        <div className="absolute top-[-10%] left-[-10%] w-96 h-96 bg-indigo-300 rounded-full mix-blend-multiply filter blur-3xl opacity-30 animate-blob"></div>
+                        <div className="absolute top-[20%] right-[-10%] w-96 h-96 bg-orange-300 rounded-full mix-blend-multiply filter blur-3xl opacity-30 animate-blob animation-delay-2000"></div>
+                        <div className="bg-white p-8 rounded-2xl shadow-xl max-w-md w-full relative z-10">
+                            <div className="text-center mb-8">
+                                <div className="bg-indigo-600 text-white w-16 h-16 rounded-xl flex items-center justify-center mx-auto mb-4 shadow-lg"><i className="fa-solid fa-briefcase text-3xl"></i></div>
+                                <h2 className="text-2xl font-bold text-slate-800">DesignManager Pro</h2>
+                                <p className="text-slate-500 mt-2">{isRegistering ? 'Crea tu cuenta administradora' : 'Inicia sesión para gestionar tus órdenes'}</p>
+                            </div>
+                            <form onSubmit={handleAuth} className="space-y-5">
+                                <div>
+                                    <label className="block text-sm font-medium text-slate-700 mb-1">Correo Electrónico</label>
+                                    <input type="email" required value={authEmail} onChange={e=>setAuthEmail(e.target.value)} className="w-full p-3 border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:outline-none" placeholder="tu@correo.com" />
+                                </div>
+                                <div>
+                                    <label className="block text-sm font-medium text-slate-700 mb-1">Contraseña</label>
+                                    <input type="password" required value={authPassword} onChange={e=>setAuthPassword(e.target.value)} className="w-full p-3 border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:outline-none" placeholder="••••••••" />
+                                </div>
+                                {authError && <div className="bg-red-50 text-red-600 p-3 rounded-lg text-sm flex items-center gap-2"><i className="fa-solid fa-circle-exclamation"></i> {authError}</div>}
+                                <button type="submit" className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold p-3 rounded-lg transition-colors shadow-md">
+                                    {isRegistering ? 'Crear Cuenta' : 'Ingresar al Sistema'}
+                                </button>
+                            </form>
+                            <div className="mt-6 text-center">
+                                <button onClick={()=>{setIsRegistering(!isRegistering); setAuthError('');}} className="text-sm text-indigo-600 hover:text-indigo-800 font-medium">
+                                    {isRegistering ? '¿Ya tienes cuenta? Inicia sesión aquí' : '¿No tienes cuenta? Regístrate aquí'}
+                                </button>
+                            </div>
+                        </div>
                     </div>
                 );
             }
@@ -341,7 +375,7 @@
             return (
                 <div className="min-h-screen">
                     
-                    {/* Modal Confirmación/Alerta */}
+                    {/* Modal */}
                     {modal.isOpen && (
                         <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-[100] flex items-center justify-center p-4">
                             <div className="bg-white rounded-xl shadow-xl max-w-md w-full p-6">
@@ -351,41 +385,25 @@
                                 </div>
                                 <p className="text-slate-600 mb-6">{modal.message}</p>
                                 <div className="flex justify-end gap-3">
-                                    {modal.type === 'confirm' && (
-                                        <button onClick={() => setModal({ isOpen: false })} className="px-4 py-2 rounded-lg text-slate-600 font-medium hover:bg-slate-100 transition-colors">Cancelar</button>
-                                    )}
-                                    <button onClick={confirmModalAction} className={`px-4 py-2 rounded-lg font-medium text-white transition-colors ${modal.type === 'alert' ? 'bg-indigo-600 hover:bg-indigo-700' : 'bg-red-600 hover:bg-red-700'}`}>
-                                        {modal.type === 'alert' ? 'Entendido' : 'Sí, eliminar'}
-                                    </button>
+                                    {modal.type === 'confirm' && (<button onClick={() => setModal({ isOpen: false })} className="px-4 py-2 rounded-lg text-slate-600 font-medium hover:bg-slate-100 transition-colors">Cancelar</button>)}
+                                    <button onClick={confirmModalAction} className={`px-4 py-2 rounded-lg font-medium text-white transition-colors ${modal.type === 'alert' ? 'bg-indigo-600 hover:bg-indigo-700' : 'bg-red-600 hover:bg-red-700'}`}>{modal.type === 'alert' ? 'Entendido' : 'Sí, eliminar'}</button>
                                 </div>
                             </div>
                         </div>
                     )}
 
-                    {/* VISTA DE IMPRESIÓN (PDF) */}
+                    {/* Vista PDF */}
                     {clientToPrint && (
                         <div className="hidden print:block absolute top-0 left-0 w-full bg-white p-8 z-50">
                             <div className="border-b-2 border-indigo-600 pb-6 mb-6 flex justify-between items-end">
-                                <div>
-                                    <h1 className="text-3xl font-bold text-slate-800">Estado de Cuenta</h1>
-                                    <p className="text-slate-500 mt-1">DesignManager Pro</p>
-                                </div>
-                                <div className="text-right">
-                                    <p className="font-bold text-slate-800">{clientToPrint.nombre}</p>
-                                    <p className="text-slate-500">Tel: {clientToPrint.telefono || 'N/A'}</p>
-                                    <p className="text-slate-500">Fecha: {new Date().toLocaleDateString()}</p>
-                                </div>
+                                <div><h1 className="text-3xl font-bold text-slate-800">Estado de Cuenta</h1><p className="text-slate-500 mt-1">DesignManager Pro</p></div>
+                                <div className="text-right"><p className="font-bold text-slate-800">{clientToPrint.nombre}</p><p className="text-slate-500">Tel: {clientToPrint.telefono || 'N/A'}</p><p className="text-slate-500">Fecha: {new Date().toLocaleDateString()}</p></div>
                             </div>
-                            
                             <h2 className="text-xl font-bold mb-4 text-slate-700">Resumen de Órdenes Pendientes</h2>
                             <table className="w-full text-left border-collapse">
                                 <thead>
                                     <tr className="bg-slate-100 text-slate-700">
-                                        <th className="p-3 border-b">ID Orden / Empresa</th>
-                                        <th className="p-3 border-b">Servicio</th>
-                                        <th className="p-3 border-b text-right">Costo Total</th>
-                                        <th className="p-3 border-b text-right">Abonado</th>
-                                        <th className="p-3 border-b text-right font-bold">Pendiente</th>
+                                        <th className="p-3 border-b">ID Orden / Empresa</th><th className="p-3 border-b">Servicio</th><th className="p-3 border-b text-right">Costo Total</th><th className="p-3 border-b text-right">Abonado</th><th className="p-3 border-b text-right font-bold">Pendiente</th>
                                     </tr>
                                 </thead>
                                 <tbody>
@@ -393,10 +411,7 @@
                                         const pendiente = o.costoTotal - o.adelanto;
                                         return (
                                             <tr key={o.id} className="border-b">
-                                                <td className="p-3 text-sm text-slate-600">
-                                                    {o.id} <br/>
-                                                    {o.empresa && <span className="font-bold text-indigo-500 text-xs">{o.empresa}</span>}
-                                                </td>
+                                                <td className="p-3 text-sm text-slate-600">{o.id} <br/>{o.empresa && <span className="font-bold text-indigo-500 text-xs">{o.empresa}</span>}</td>
                                                 <td className="p-3 text-sm text-slate-800">{o.servicio}</td>
                                                 <td className="p-3 text-sm text-right">S/ {o.costoTotal.toFixed(2)}</td>
                                                 <td className="p-3 text-sm text-right text-emerald-600">S/ {o.adelanto.toFixed(2)}</td>
@@ -404,14 +419,49 @@
                                             </tr>
                                         );
                                     })}
-                                    {clientToPrint.ordenes.filter(o => o.estado === 'Pendiente').length === 0 && (
-                                        <tr><td colSpan="5" className="p-4 text-center text-slate-500">No hay órdenes con saldo pendiente.</td></tr>
-                                    )}
+                                    {clientToPrint.ordenes.filter(o => o.estado === 'Pendiente').length === 0 && (<tr><td colSpan="5" className="p-4 text-center text-slate-500">No hay órdenes con saldo pendiente.</td></tr>)}
+                                </tbody>
+                                <tfoot><tr className="bg-slate-50"><td colSpan="4" className="p-3 text-right font-bold text-slate-700">TOTAL A PAGAR:</td><td className="p-3 text-right font-bold text-xl text-indigo-600">S/ {clientToPrint.saldoPendiente.toFixed(2)}</td></tr></tfoot>
+                            </table>
+                        </div>
+                    )}
+
+                    {/* Vista PDF de Finanzas */}
+                    {financeToPrint && (
+                        <div className="hidden print:block absolute top-0 left-0 w-full bg-white p-8 z-50">
+                            <div className="border-b-2 border-indigo-600 pb-6 mb-6 flex justify-between items-end">
+                                <div><h1 className="text-3xl font-bold text-slate-800">Reporte Financiero</h1><p className="text-slate-500 mt-1">DesignManager Pro</p></div>
+                                <div className="text-right">
+                                    <p className="font-bold text-slate-800">Filtro: {financeClientFilter}</p>
+                                    <p className="text-slate-500">Fecha: {new Date().toLocaleDateString()}</p>
+                                </div>
+                            </div>
+                            <table className="w-full text-left border-collapse">
+                                <thead>
+                                    <tr className="bg-slate-100 text-slate-700">
+                                        <th className="p-3 border-b">Cliente / Empresa</th><th className="p-3 border-b">Servicio</th><th className="p-3 border-b text-right">Facturado</th><th className="p-3 border-b text-right">Abonado</th><th className="p-3 border-b text-right font-bold">Pendiente</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {orders.filter(isFinanceMatch).map(o => {
+                                        const pendiente = o.costoTotal - o.adelanto;
+                                        return (
+                                            <tr key={o.id} className="border-b">
+                                                <td className="p-3 text-sm text-slate-600 font-bold">{o.cliente} <br/>{o.empresa && <span className="font-normal text-indigo-500 text-xs">{o.empresa}</span>}</td>
+                                                <td className="p-3 text-sm text-slate-800">{o.servicio}</td>
+                                                <td className="p-3 text-sm text-right">S/ {o.costoTotal.toFixed(2)}</td>
+                                                <td className="p-3 text-sm text-right text-emerald-600">S/ {o.adelanto.toFixed(2)}</td>
+                                                <td className="p-3 text-sm text-right font-bold text-orange-600">S/ {pendiente.toFixed(2)}</td>
+                                            </tr>
+                                        );
+                                    })}
                                 </tbody>
                                 <tfoot>
                                     <tr className="bg-slate-50">
-                                        <td colSpan="4" className="p-3 text-right font-bold text-slate-700">TOTAL A PAGAR:</td>
-                                        <td className="p-3 text-right font-bold text-xl text-indigo-600">S/ {clientToPrint.saldoPendiente.toFixed(2)}</td>
+                                        <td colSpan="2" className="p-3 text-right font-bold text-slate-700">TOTALES:</td>
+                                        <td className="p-3 text-right font-bold text-slate-800">S/ {orders.filter(o => o.estado !== 'Cancelado').filter(isFinanceMatch).reduce((sum, o) => sum + o.costoTotal, 0).toFixed(2)}</td>
+                                        <td className="p-3 text-right font-bold text-emerald-600">S/ {orders.filter(isFinanceMatch).reduce((sum, o) => sum + o.adelanto, 0).toFixed(2)}</td>
+                                        <td className="p-3 text-right font-bold text-xl text-orange-600">S/ {orders.filter(o => o.estado === 'Pendiente').filter(isFinanceMatch).reduce((sum, o) => sum + (o.costoTotal - o.adelanto), 0).toFixed(2)}</td>
                                     </tr>
                                 </tfoot>
                             </table>
@@ -426,71 +476,79 @@
                                     <i className="fa-solid fa-briefcase text-2xl"></i>
                                     <h1 className="text-xl font-bold">DesignManager Pro</h1>
                                 </div>
-                                <div className="flex bg-indigo-700 rounded-lg p-1 overflow-x-auto w-full sm:w-auto">
-                                    <button onClick={() => goTo('dashboard')} className={`px-4 py-2 rounded-md flex items-center gap-2 text-sm font-medium transition-colors ${view === 'dashboard' ? 'bg-white text-indigo-700 shadow' : 'text-indigo-100 hover:text-white hover:bg-indigo-600'}`}>
-                                        <i className="fa-solid fa-table-cells-large"></i> <span className="hidden sm:inline">Índice</span>
-                                    </button>
-                                    <button onClick={() => goTo('orders')} className={`px-4 py-2 rounded-md flex items-center gap-2 text-sm font-medium transition-colors ${view === 'orders' || view === 'form' ? 'bg-white text-indigo-700 shadow' : 'text-indigo-100 hover:text-white hover:bg-indigo-600'}`}>
-                                        <i className="fa-solid fa-file-lines"></i> <span className="hidden sm:inline">Órdenes</span>
-                                    </button>
-                                    <button onClick={() => goTo('clients')} className={`px-4 py-2 rounded-md flex items-center gap-2 text-sm font-medium transition-colors ${view === 'clients' || view === 'client-form' ? 'bg-white text-indigo-700 shadow' : 'text-indigo-100 hover:text-white hover:bg-indigo-600'}`}>
-                                        <i className="fa-solid fa-users"></i> <span className="hidden sm:inline">Clientes</span>
-                                    </button>
-                                    <button onClick={() => goTo('finances')} className={`px-4 py-2 rounded-md flex items-center gap-2 text-sm font-medium transition-colors ${view === 'finances' ? 'bg-white text-indigo-700 shadow' : 'text-indigo-100 hover:text-white hover:bg-indigo-600'}`}>
-                                        <i className="fa-solid fa-chart-pie"></i> <span className="hidden sm:inline">Finanzas</span>
+                                <div className="flex items-center gap-4">
+                                    <div className="flex bg-indigo-700 rounded-lg p-1 overflow-x-auto">
+                                        <button onClick={() => goTo('dashboard')} className={`px-4 py-2 rounded-md flex items-center gap-2 text-sm font-medium transition-colors ${view === 'dashboard' ? 'bg-white text-indigo-700 shadow' : 'text-indigo-100 hover:text-white hover:bg-indigo-600'}`}>
+                                            <i className="fa-solid fa-table-cells-large"></i> <span className="hidden sm:inline">Índice</span>
+                                        </button>
+                                        <button onClick={() => goTo('orders')} className={`px-4 py-2 rounded-md flex items-center gap-2 text-sm font-medium transition-colors ${view === 'orders' || view === 'form' ? 'bg-white text-indigo-700 shadow' : 'text-indigo-100 hover:text-white hover:bg-indigo-600'}`}>
+                                            <i className="fa-solid fa-file-lines"></i> <span className="hidden sm:inline">Órdenes</span>
+                                        </button>
+                                        <button onClick={() => goTo('clients')} className={`px-4 py-2 rounded-md flex items-center gap-2 text-sm font-medium transition-colors ${view === 'clients' || view === 'client-form' ? 'bg-white text-indigo-700 shadow' : 'text-indigo-100 hover:text-white hover:bg-indigo-600'}`}>
+                                            <i className="fa-solid fa-users"></i> <span className="hidden sm:inline">Clientes</span>
+                                        </button>
+                                        <button onClick={() => goTo('finances')} className={`px-4 py-2 rounded-md flex items-center gap-2 text-sm font-medium transition-colors ${view === 'finances' ? 'bg-white text-indigo-700 shadow' : 'text-indigo-100 hover:text-white hover:bg-indigo-600'}`}>
+                                            <i className="fa-solid fa-chart-pie"></i> <span className="hidden sm:inline">Finanzas</span>
+                                        </button>
+                                    </div>
+                                    <button onClick={() => auth.signOut()} title="Cerrar Sesión" className="text-indigo-200 hover:text-white bg-indigo-800 p-2 rounded-lg transition-colors">
+                                        <i className="fa-solid fa-right-from-bracket"></i>
                                     </button>
                                 </div>
                             </div>
                         </nav>
 
                         <main className="max-w-6xl mx-auto p-4 mt-4">
-                            
+                            {loadingData && (
+                                <div className="text-center py-10">
+                                    <i className="fa-solid fa-spinner fa-spin text-3xl text-indigo-600 mb-2"></i>
+                                    <p className="text-slate-500">Cargando datos...</p>
+                                </div>
+                            )}
+
                             {/* DASHBOARD */}
-                            {view === 'dashboard' && (
+                            {!loadingData && view === 'dashboard' && (
                                 <div className="space-y-6">
                                     <h2 className="text-2xl font-bold text-slate-800">Resumen de tu Negocio</h2>
-                                    
                                     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-                                        <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-100 flex items-center gap-4 border-l-4 border-l-indigo-500">
-                                            <div className="p-3 bg-indigo-50 text-indigo-600 rounded-full"><i className="fa-solid fa-users text-2xl"></i></div>
-                                            <div><p className="text-sm text-slate-500 font-medium">Total Clientes</p><p className="text-2xl font-bold text-slate-800">{stats.clientsCount}</p></div>
-                                        </div>
-                                        <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-100 flex items-center gap-4 border-l-4 border-l-orange-500">
-                                            <div className="p-3 bg-orange-50 text-orange-600 rounded-full"><i className="fa-solid fa-clock text-2xl"></i></div>
-                                            <div><p className="text-sm text-slate-500 font-medium">Órdenes Activas</p><p className="text-2xl font-bold text-slate-800">{stats.activeCount}</p></div>
-                                        </div>
-                                        <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-100 flex items-center gap-4 border-l-4 border-l-emerald-500">
-                                            <div className="p-3 bg-emerald-50 text-emerald-600 rounded-full"><i className="fa-solid fa-circle-check text-2xl"></i></div>
-                                            <div><p className="text-sm text-slate-500 font-medium">Completadas</p><p className="text-2xl font-bold text-slate-800">{stats.completedCount}</p></div>
-                                        </div>
-                                        <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-100 flex items-center gap-4 border-l-4 border-l-red-500">
-                                            <div className="p-3 bg-red-50 text-red-600 rounded-full"><i className="fa-solid fa-circle-xmark text-2xl"></i></div>
-                                            <div><p className="text-sm text-slate-500 font-medium">Canceladas</p><p className="text-2xl font-bold text-slate-800">{stats.cancelledCount}</p></div>
-                                        </div>
+                                        <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-100 flex items-center gap-4 border-l-4 border-l-indigo-500"><div className="p-3 bg-indigo-50 text-indigo-600 rounded-full"><i className="fa-solid fa-users text-2xl"></i></div><div><p className="text-sm text-slate-500 font-medium">Total Clientes</p><p className="text-2xl font-bold text-slate-800">{stats.clientsCount}</p></div></div>
+                                        <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-100 flex items-center gap-4 border-l-4 border-l-orange-500"><div className="p-3 bg-orange-50 text-orange-600 rounded-full"><i className="fa-solid fa-clock text-2xl"></i></div><div><p className="text-sm text-slate-500 font-medium">Órdenes Activas</p><p className="text-2xl font-bold text-slate-800">{stats.activeCount}</p></div></div>
+                                        <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-100 flex items-center gap-4 border-l-4 border-l-emerald-500"><div className="p-3 bg-emerald-50 text-emerald-600 rounded-full"><i className="fa-solid fa-circle-check text-2xl"></i></div><div><p className="text-sm text-slate-500 font-medium">Completadas</p><p className="text-2xl font-bold text-slate-800">{stats.completedCount}</p></div></div>
+                                        <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-100 flex items-center gap-4 border-l-4 border-l-red-500"><div className="p-3 bg-red-50 text-red-600 rounded-full"><i className="fa-solid fa-circle-xmark text-2xl"></i></div><div><p className="text-sm text-slate-500 font-medium">Canceladas</p><p className="text-2xl font-bold text-slate-800">{stats.cancelledCount}</p></div></div>
                                     </div>
 
                                     <div className="mt-6">
                                         <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-100">
                                             <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-4">
                                                 <h3 className="text-lg font-bold text-slate-700 flex items-center gap-2"><i className="fa-solid fa-clock text-orange-500 text-xl"></i> Órdenes Pendientes</h3>
-                                                <select value={dashboardClientFilter} onChange={(e) => setDashboardClientFilter(e.target.value)} className="w-full sm:w-auto p-2 rounded-lg border border-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500 text-sm font-medium text-slate-600 bg-slate-50">
-                                                    <option value="Todos">Todos los clientes</option>
-                                                    {clientsList.map(c => <option key={c.id} value={c.nombre}>{c.nombre}</option>)}
-                                                </select>
+                                                <div className="flex gap-2 w-full sm:w-auto">
+                                                    <select value={dashboardClientFilter} onChange={(e) => setDashboardClientFilter(e.target.value)} className="w-full sm:w-auto p-2 rounded-lg border border-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500 text-sm font-medium text-slate-600 bg-slate-50">
+                                                        <option value="Todos">Todos los clientes</option>
+                                                        {clientsList.map(c => <option key={c.id} value={c.nombre}>{c.nombre}</option>)}
+                                                    </select>
+                                                    <select value={dashboardServiceFilter} onChange={(e) => setDashboardServiceFilter(e.target.value)} className="w-full sm:w-auto p-2 rounded-lg border border-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500 text-sm font-medium text-slate-600 bg-slate-50">
+                                                        <option value="Todos">Todos los servicios</option>
+                                                        <option value="Logística">Logística</option>
+                                                        <option value="Reingeniería">Reingeniería</option>
+                                                        <option value="Diseños">Diseños</option>
+                                                        <option value="Visitas Técnicas">Visitas Técnicas</option>
+                                                    </select>
+                                                </div>
                                             </div>
                                             <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-                                                {orders.filter(o => o.estado === 'Pendiente' && (dashboardClientFilter === 'Todos' || o.cliente === dashboardClientFilter)).length === 0 ? (
+                                                {orders.filter(o => o.estado === 'Pendiente' && (dashboardClientFilter === 'Todos' || o.cliente === dashboardClientFilter) && (dashboardServiceFilter === 'Todos' || o.tipoServicio === dashboardServiceFilter)).length === 0 ? (
                                                     <p className="text-slate-500 col-span-full py-4 text-center">No hay órdenes pendientes en este momento.</p>
                                                 ) : (
-                                                    orders.filter(o => o.estado === 'Pendiente' && (dashboardClientFilter === 'Todos' || o.cliente === dashboardClientFilter)).map(o => {
+                                                    orders.filter(o => o.estado === 'Pendiente' && (dashboardClientFilter === 'Todos' || o.cliente === dashboardClientFilter) && (dashboardServiceFilter === 'Todos' || o.tipoServicio === dashboardServiceFilter)).map(o => {
                                                         const ultimoPago = o.depositos && o.depositos.length > 0 ? o.depositos[o.depositos.length - 1].fecha : 'Sin pagos';
                                                         return (
                                                             <div key={o.id} className="flex justify-between items-start p-4 hover:bg-slate-50 rounded-lg border border-orange-100 cursor-pointer shadow-sm transition-colors" onClick={() => handleEditOrder(o)}>
                                                                 <div>
                                                                     <p className="font-bold text-sm text-slate-800">{o.cliente}</p>
                                                                     {o.empresa && <p className="text-xs font-medium text-indigo-500 mb-1"><i className="fa-solid fa-building"></i> {o.empresa}</p>}
+                                                                    <p className="text-xs text-indigo-600 font-bold mt-1 bg-indigo-50 inline-block px-2 py-0.5 rounded"><i className="fa-solid fa-tag"></i> {o.tipoServicio || 'Diseños'}</p>
                                                                     <p className="text-xs text-slate-500 mt-1 line-clamp-2">{o.servicio}</p>
-                                                                    <span className="text-xs text-slate-400 mt-2 flex items-center gap-1"><i className="fa-solid fa-calendar text-xs"></i> Último pago: {ultimoPago}</span>
+                                                                    <span className="text-xs text-slate-400 mt-2 flex items-center gap-1"><i className="fa-solid fa-calendar text-xs"></i> Solicitud: {o.fechaSolicitud || 'N/A'}</span>
                                                                 </div>
                                                                 <span className="text-xs px-2 py-1 rounded-full bg-orange-100 text-orange-700 font-medium whitespace-nowrap">Pendiente</span>
                                                             </div>
@@ -504,16 +562,13 @@
                             )}
 
                             {/* ÓRDENES */}
-                            {view === 'orders' && (
+                            {!loadingData && view === 'orders' && (
                                 <div className="space-y-6">
                                     <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 bg-white p-4 rounded-xl shadow-sm border border-slate-100">
                                         <h2 className="text-xl font-bold text-slate-700">Todas las Órdenes</h2>
                                         <div className="flex flex-wrap sm:flex-nowrap gap-2 w-full sm:w-auto">
                                             <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} className="p-2 rounded-lg border border-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500 text-sm font-medium text-slate-600 bg-slate-50">
-                                                <option value="Todos">Todos los estados</option>
-                                                <option value="Pendiente">🟡 Pendientes</option>
-                                                <option value="Completado">🟢 Completados</option>
-                                                <option value="Cancelado">🔴 Cancelados</option>
+                                                <option value="Todos">Todos los estados</option><option value="Pendiente">🟡 Pendientes</option><option value="Completado">🟢 Completados</option><option value="Cancelado">🔴 Cancelados</option>
                                             </select>
                                             <select value={ordersClientFilter} onChange={(e) => setOrdersClientFilter(e.target.value)} className="p-2 rounded-lg border border-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500 text-sm font-medium text-slate-600 bg-slate-50">
                                                 <option value="Todos">Todos los clientes</option>
@@ -530,40 +585,27 @@
                                     </div>
 
                                     <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-                                        {filteredOrders.length === 0 && (
-                                            <p className="text-slate-500 col-span-full text-center py-8">No se encontraron órdenes que coincidan con la búsqueda.</p>
-                                        )}
                                         {filteredOrders.map(order => {
                                             const pendiente = order.costoTotal - order.adelanto;
                                             const ultimoPago = order.depositos && order.depositos.length > 0 ? order.depositos[order.depositos.length - 1].fecha : 'Sin pagos';
-                                            
                                             return (
                                                 <div key={order.id} className={`bg-white rounded-xl shadow-sm border-l-4 p-5 relative group ${order.estado === 'Pendiente' ? 'border-l-orange-400' : order.estado === 'Completado' ? 'border-l-emerald-400' : 'border-l-red-400'} border-t border-r border-b border-slate-100`}>
                                                     <div className="absolute top-4 right-4 flex gap-2">
                                                         <button onClick={() => handleEditOrder(order)} className="p-1.5 bg-slate-50 text-slate-600 rounded-md hover:bg-indigo-50 hover:text-indigo-600"><i className="fa-solid fa-pen"></i></button>
                                                         <button onClick={() => requestDelete('order', order.id)} className="p-1.5 bg-slate-50 text-slate-600 rounded-md hover:bg-red-50 hover:text-red-600"><i className="fa-solid fa-trash"></i></button>
                                                     </div>
-
                                                     <div className="mb-3">
                                                         <span className="text-xs font-bold text-slate-400">{order.id}</span>
                                                         <h3 className="font-bold text-lg mt-1 text-slate-800">{order.cliente}</h3>
                                                         {order.empresa && <p className="text-xs font-medium text-indigo-500 mb-1"><i className="fa-solid fa-building"></i> {order.empresa}</p>}
+                                                        <p className="text-xs text-indigo-600 font-bold mb-1"><i className="fa-solid fa-tag"></i> {order.tipoServicio || 'Diseños'}</p>
                                                         <p className="text-sm text-slate-500 line-clamp-1">{order.servicio}</p>
                                                     </div>
-
-                                                    {order.imagenes && order.imagenes.length > 0 && (
-                                                        <div className="flex gap-1 mb-3">
-                                                            <i className="fa-solid fa-image text-slate-400"></i>
-                                                            <span className="text-xs text-slate-500">{order.imagenes.length} imagen(es)</span>
-                                                        </div>
-                                                    )}
-
                                                     <div className="space-y-1 mb-3 text-sm text-slate-600 border-t border-slate-100 pt-3">
                                                         <div className="flex justify-between"><span>Costo Total:</span><span>S/ {order.costoTotal.toFixed(2)}</span></div>
                                                         <div className="flex justify-between"><span className="text-slate-400 text-xs">Adelanto ({order.depositos?.length || 0}):</span><span className="text-emerald-600">S/ {order.adelanto.toFixed(2)}</span></div>
                                                         <div className="flex justify-between font-bold"><span>Pendiente:</span><span className={pendiente > 0 ? "text-orange-600" : "text-emerald-600"}>S/ {pendiente.toFixed(2)}</span></div>
                                                     </div>
-
                                                     <div className="flex justify-between items-center text-xs border-t border-slate-100 pt-3">
                                                         <span className={`px-2 py-1 rounded-full font-medium ${order.estado === 'Pendiente' ? 'bg-orange-100 text-orange-700' : order.estado === 'Completado' ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-700'}`}>{order.estado}</span>
                                                         <span className="text-slate-400"><i className="fa-solid fa-calendar text-xs"></i> {ultimoPago}</span>
@@ -576,7 +618,7 @@
                             )}
 
                             {/* CLIENTES (LISTA) */}
-                            {view === 'clients' && (
+                            {!loadingData && view === 'clients' && (
                                 <div className="space-y-6">
                                     <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 bg-white p-4 rounded-xl shadow-sm border border-slate-100">
                                         <h2 className="text-xl font-bold text-slate-700">Directorio de Clientes</h2>
@@ -590,44 +632,31 @@
                                             </button>
                                         </div>
                                     </div>
-
                                     <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-                                        {filteredClients.length === 0 && (
-                                            <p className="text-slate-500 col-span-full text-center py-8">No se encontraron clientes registrados.</p>
-                                        )}
                                         {filteredClients.map((client) => (
                                             <div key={client.id} className="bg-white rounded-xl shadow-sm border border-slate-100 p-5 hover:border-indigo-200 transition-colors relative group">
                                                 <div className="absolute top-4 right-4 flex gap-2">
                                                     <button onClick={() => handleEditClient(client)} className="p-1.5 bg-slate-50 text-slate-600 rounded-md hover:bg-indigo-50 hover:text-indigo-600"><i className="fa-solid fa-pen"></i></button>
                                                     <button onClick={() => requestDelete('client', client.id)} className="p-1.5 bg-slate-50 text-slate-600 rounded-md hover:bg-red-50 hover:text-red-600"><i className="fa-solid fa-trash"></i></button>
                                                 </div>
-
                                                 <div className="flex items-start justify-between mb-4 pr-16">
                                                     <div>
                                                         <h3 className="font-bold text-lg text-slate-800">{client.nombre}</h3>
                                                         <p className="text-sm text-slate-500"><i className="fa-solid fa-phone text-xs"></i> {client.telefono || 'Sin teléfono'}</p>
                                                     </div>
                                                 </div>
-
-                                                {/* Lista de Empresas */}
                                                 <div className="mb-4">
                                                     <p className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-1">Empresas Asignadas:</p>
                                                     {client.empresas && client.empresas.length > 0 ? (
                                                         <div className="flex flex-wrap gap-1">
-                                                            {client.empresas.map((emp, i) => (
-                                                                <span key={i} className="text-xs bg-slate-100 text-slate-600 px-2 py-1 rounded-md border border-slate-200"><i className="fa-solid fa-building mr-1"></i>{emp}</span>
-                                                            ))}
+                                                            {client.empresas.map((emp, i) => <span key={i} className="text-xs bg-slate-100 text-slate-600 px-2 py-1 rounded-md border border-slate-200"><i className="fa-solid fa-building mr-1"></i>{emp}</span>)}
                                                         </div>
-                                                    ) : (
-                                                        <p className="text-xs text-slate-400 italic">No tiene empresas registradas</p>
-                                                    )}
+                                                    ) : (<p className="text-xs text-slate-400 italic">No tiene empresas registradas</p>)}
                                                 </div>
-                                                
                                                 <div className="space-y-2 text-sm mb-4 border-t border-slate-100 pt-3">
                                                     <div className="flex justify-between text-slate-600"><span>Total Órdenes:</span> <span className="font-bold">{client.totalPedidos}</span></div>
                                                     <div className="flex justify-between text-slate-600 bg-orange-50 p-2 rounded"><span className="text-orange-800">Saldo Pendiente:</span> <span className="font-bold text-orange-600">S/ {client.saldoPendiente.toFixed(2)}</span></div>
                                                 </div>
-
                                                 <button onClick={() => handlePrint(client)} className="w-full flex items-center justify-center gap-2 bg-slate-800 hover:bg-slate-700 text-white py-2 rounded-lg text-sm transition-colors">
                                                     <i className="fa-solid fa-file-pdf"></i> Generar PDF Pendientes
                                                 </button>
@@ -638,13 +667,12 @@
                             )}
 
                             {/* CLIENTES (FORMULARIO) */}
-                            {view === 'client-form' && (
+                            {!loadingData && view === 'client-form' && (
                                 <div className="bg-white rounded-xl shadow-lg border border-slate-100 overflow-hidden max-w-2xl mx-auto">
                                     <div className="bg-slate-50 px-6 py-4 border-b border-slate-100 flex items-center gap-3">
                                         <button onClick={() => goTo('clients')} className="p-2 hover:bg-slate-200 rounded-full text-slate-500"><i className="fa-solid fa-arrow-left text-lg"></i></button>
                                         <h2 className="text-xl font-bold text-slate-700">{editingId ? 'Editar Cliente' : 'Nuevo Cliente'}</h2>
                                     </div>
-
                                     <form onSubmit={handleSaveClient} className="p-6 space-y-6">
                                         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                                             <div>
@@ -656,7 +684,6 @@
                                                 <input type="tel" name="telefono" className="w-full p-2.5 rounded-lg border border-slate-200 focus:ring-2 focus:ring-indigo-500" value={clientFormData.telefono} onChange={handleClientChange} />
                                             </div>
                                         </div>
-
                                         <div className="bg-slate-50 p-4 rounded-xl border border-slate-200">
                                             <div className="flex justify-between items-center mb-3">
                                                 <label className="block text-xs font-bold text-slate-600 uppercase tracking-wider flex items-center gap-1"><i className="fa-solid fa-building text-sm"></i> Empresas del Cliente</label>
@@ -664,7 +691,6 @@
                                                     <i className="fa-solid fa-plus text-sm"></i> Añadir Empresa
                                                 </button>
                                             </div>
-                                            
                                             <div className="space-y-2">
                                                 {clientFormData.empresas.map((emp, idx) => (
                                                     <div key={idx} className="flex gap-2 items-center">
@@ -672,12 +698,8 @@
                                                         <button type="button" onClick={() => handleRemoveEmpresa(idx)} className="text-red-400 p-2 hover:bg-red-50 hover:text-red-600 rounded-md transition-colors"><i className="fa-solid fa-trash"></i></button>
                                                     </div>
                                                 ))}
-                                                {clientFormData.empresas.length === 0 && (
-                                                    <p className="text-xs text-slate-400 italic text-center py-2">No se han añadido empresas.</p>
-                                                )}
                                             </div>
                                         </div>
-
                                         <div className="pt-4 border-t border-slate-100 flex justify-end gap-3">
                                             <button type="button" onClick={() => goTo('clients')} className="px-6 py-2.5 rounded-lg border border-slate-200 text-slate-600 font-medium hover:bg-slate-50">Cancelar</button>
                                             <button type="submit" className="px-6 py-2.5 rounded-lg bg-indigo-600 text-white font-medium hover:bg-indigo-700 flex items-center gap-2"><i className="fa-solid fa-floppy-disk text-lg"></i> Guardar Cliente</button>
@@ -687,7 +709,7 @@
                             )}
 
                             {/* FINANZAS */}
-                            {view === 'finances' && (
+                            {!loadingData && view === 'finances' && (
                                 <div className="space-y-6">
                                     <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 bg-white p-4 rounded-xl shadow-sm border border-slate-100">
                                         <h2 className="text-xl font-bold text-slate-700 flex items-center gap-2"><i className="fa-solid fa-chart-pie text-indigo-500 text-2xl"></i> Finanzas y Cobranzas</h2>
@@ -695,31 +717,32 @@
                                             <div className="relative flex-1 sm:w-64">
                                                 <i className="fa-solid fa-filter absolute left-3 top-3 text-slate-400"></i>
                                                 <select value={financeClientFilter} onChange={(e) => setFinanceClientFilter(e.target.value)} className="w-full pl-10 pr-4 py-2 rounded-lg border border-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500 appearance-none bg-white text-sm">
-                                                    <option value="Todos">Todos los clientes</option>
-                                                    {clientsList.map(c => <option key={c.id} value={c.nombre}>{c.nombre}</option>)}
+                                                    <option value="Todos">Todos los clientes y empresas</option>
+                                                    {financeFilterOptions.map(c => <option key={c} value={c}>{c}</option>)}
                                                 </select>
                                             </div>
                                             <button onClick={() => setShowFinances(!showFinances)} className="bg-slate-100 hover:bg-slate-200 text-slate-600 px-4 py-2 rounded-lg flex items-center gap-2 transition-colors border border-slate-200">
                                                 {showFinances ? <><i className="fa-solid fa-eye-slash text-lg"></i> <span className="hidden sm:inline">Ocultar</span></> : <><i className="fa-solid fa-eye text-lg"></i> <span className="hidden sm:inline">Mostrar</span></>}
                                             </button>
+                                            <button onClick={handlePrintFinance} className="bg-slate-800 hover:bg-slate-700 text-white px-4 py-2 rounded-lg flex items-center gap-2 transition-colors shadow-sm">
+                                                <i className="fa-solid fa-file-pdf"></i> <span className="hidden sm:inline">PDF</span>
+                                            </button>
                                         </div>
                                     </div>
-
                                     <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                                         <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-100">
                                             <h3 className="text-slate-500 font-medium mb-1">Total Facturado {financeClientFilter !== 'Todos' && `(${financeClientFilter})`}</h3>
                                             <p className={`text-4xl font-bold text-slate-800 ${showFinances ? '' : 'blur-md select-none transition-all'}`}>
-                                                S/ {orders.filter(o => o.estado !== 'Cancelado').filter(o => financeClientFilter === 'Todos' || o.cliente === financeClientFilter).reduce((sum, o) => sum + o.costoTotal, 0).toFixed(2)}
+                                                S/ {orders.filter(o => o.estado !== 'Cancelado').filter(isFinanceMatch).reduce((sum, o) => sum + o.costoTotal, 0).toFixed(2)}
                                             </p>
                                         </div>
                                         <div className="bg-orange-50 p-6 rounded-xl shadow-sm border border-orange-100">
-                                            <h3 className="text-orange-800 font-medium mb-1">Total Pendiente por Cobrar {financeClientFilter !== 'Todos' && `(${financeClientFilter})`}</h3>
+                                            <h3 className="text-orange-800 font-medium mb-1">Total Pendiente {financeClientFilter !== 'Todos' && `(${financeClientFilter})`}</h3>
                                             <p className={`text-4xl font-bold text-orange-600 ${showFinances ? '' : 'blur-md select-none transition-all'}`}>
-                                                S/ {orders.filter(o => o.estado === 'Pendiente').filter(o => financeClientFilter === 'Todos' || o.cliente === financeClientFilter).reduce((sum, o) => sum + (o.costoTotal - o.adelanto), 0).toFixed(2)}
+                                                S/ {orders.filter(o => o.estado === 'Pendiente').filter(isFinanceMatch).reduce((sum, o) => sum + (o.costoTotal - o.adelanto), 0).toFixed(2)}
                                             </p>
                                         </div>
                                     </div>
-
                                     <div className="bg-white rounded-xl shadow-sm border border-slate-100 overflow-hidden">
                                         <div className="p-4 bg-slate-50 border-b border-slate-100"><h3 className="font-bold text-slate-700">Desglose de Órdenes {financeClientFilter !== 'Todos' && `- ${financeClientFilter}`}</h3></div>
                                         <div className="overflow-x-auto">
@@ -731,15 +754,12 @@
                                                     </tr>
                                                 </thead>
                                                 <tbody>
-                                                    {orders.filter(o => financeClientFilter === 'Todos' || o.cliente === financeClientFilter).map(o => {
+                                                    {orders.filter(isFinanceMatch).map(o => {
                                                         const pendiente = o.costoTotal - o.adelanto;
                                                         return (
                                                             <tr key={o.id} className="border-b border-slate-50 hover:bg-slate-50 transition-colors">
                                                                 <td className="p-4 text-sm text-slate-800 font-medium">{o.cliente}</td>
-                                                                <td className="p-4 text-sm text-slate-600">
-                                                                    <span className="font-medium text-slate-800 line-clamp-1">{o.servicio}</span>
-                                                                    {o.empresa && <span className="text-xs text-indigo-500 mt-1 block"><i className="fa-solid fa-building"></i> {o.empresa}</span>}
-                                                                </td>
+                                                                <td className="p-4 text-sm text-slate-600"><span className="font-medium text-slate-800 line-clamp-1">{o.servicio}</span>{o.empresa && <span className="text-xs text-indigo-500 mt-1 block"><i className="fa-solid fa-building"></i> {o.empresa}</span>}</td>
                                                                 <td className={`p-4 text-sm text-right ${showFinances ? 'text-slate-600' : 'blur-sm select-none'}`}>S/ {o.costoTotal.toFixed(2)}</td>
                                                                 <td className={`p-4 text-sm text-right ${showFinances ? 'text-emerald-600' : 'blur-sm select-none'}`}>S/ {o.adelanto.toFixed(2)}</td>
                                                                 <td className={`p-4 text-sm text-right font-bold ${showFinances ? (pendiente > 0 ? 'text-orange-600' : 'text-slate-400') : 'blur-sm select-none'}`}>S/ {pendiente.toFixed(2)}</td>
@@ -755,7 +775,7 @@
                             )}
 
                             {/* FORMULARIO DE ÓRDENES */}
-                            {view === 'form' && (
+                            {!loadingData && view === 'form' && (
                                 <div className="bg-white rounded-xl shadow-lg border border-slate-100 overflow-hidden max-w-4xl mx-auto">
                                     <div className="bg-slate-50 px-6 py-4 border-b border-slate-100 flex items-center justify-between">
                                         <div className="flex items-center gap-3">
@@ -768,14 +788,11 @@
                                             </select>
                                         )}
                                     </div>
-
                                     <form onSubmit={handleSaveOrder} className="p-6">
                                         <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-                                            {/* Izquierda */}
                                             <div className="space-y-6">
                                                 <div className="space-y-4">
                                                     <h3 className="text-sm font-bold text-indigo-500 uppercase tracking-wider flex items-center gap-2"><i className="fa-solid fa-user"></i> Datos del Cliente</h3>
-                                                    
                                                     {clientsList.length === 0 ? (
                                                         <div className="bg-orange-50 text-orange-800 p-3 rounded-lg text-sm border border-orange-200 flex flex-col items-center">
                                                             <p className="mb-2 text-center">Para crear una orden, primero debes registrar un cliente.</p>
@@ -786,21 +803,19 @@
                                                             <div>
                                                                 <label className="block text-xs font-medium text-slate-500 mb-1">Seleccionar Cliente *</label>
                                                                 <select name="cliente" required value={formData.cliente} onChange={handleChangeOrder} className="w-full p-2.5 rounded-lg border border-slate-200 focus:ring-2 focus:ring-indigo-500 bg-white">
-                                                                    <option value="">Selecciona un cliente de tu lista...</option>
+                                                                    <option value="">Selecciona un cliente...</option>
                                                                     {clientsList.map(c => <option key={c.id} value={c.nombre}>{c.nombre}</option>)}
                                                                 </select>
                                                             </div>
-
                                                             {clientCompanies.length > 0 && (
-                                                                <div className="bg-indigo-50 p-3 rounded-lg border border-indigo-100 animate-in fade-in zoom-in duration-200">
+                                                                <div className="bg-indigo-50 p-3 rounded-lg border border-indigo-100">
                                                                     <label className="block text-xs font-bold text-indigo-700 mb-1"><i className="fa-solid fa-building"></i> Empresa (Opcional)</label>
                                                                     <select name="empresa" value={formData.empresa} onChange={handleChangeOrder} className="w-full p-2 rounded-md border border-indigo-200 focus:ring-2 focus:ring-indigo-500 bg-white text-sm">
-                                                                        <option value="">Ninguna empresa en específico</option>
+                                                                        <option value="">Ninguna en específico</option>
                                                                         {clientCompanies.map((emp, i) => <option key={i} value={emp}>{emp}</option>)}
                                                                     </select>
                                                                 </div>
                                                             )}
-                                                            
                                                             <div>
                                                                 <label className="block text-xs font-medium text-slate-500 mb-1">Teléfono</label>
                                                                 <input type="tel" name="telefono" className="w-full p-2.5 rounded-lg border border-slate-200 bg-slate-50" value={formData.telefono} readOnly placeholder="Autocompletado al seleccionar cliente..." />
@@ -808,11 +823,25 @@
                                                         </>
                                                     )}
                                                 </div>
-
                                                 <div className="space-y-4 pt-4 border-t border-slate-100">
                                                     <h3 className="text-sm font-bold text-indigo-500 uppercase tracking-wider flex items-center gap-2"><i className="fa-solid fa-file-lines"></i> Servicio</h3>
+                                                    <div className="grid grid-cols-2 gap-4">
+                                                        <div>
+                                                            <label className="block text-xs font-medium text-slate-500 mb-1">Tipo de Servicio *</label>
+                                                            <select name="tipoServicio" required value={formData.tipoServicio || 'Diseños'} onChange={handleChangeOrder} className="w-full p-2.5 rounded-lg border border-slate-200 focus:ring-2 focus:ring-indigo-500 bg-white">
+                                                                <option value="Logística">Logística</option>
+                                                                <option value="Reingeniería">Reingeniería</option>
+                                                                <option value="Diseños">Diseños</option>
+                                                                <option value="Visitas Técnicas">Visitas Técnicas</option>
+                                                            </select>
+                                                        </div>
+                                                        <div>
+                                                            <label className="block text-xs font-medium text-slate-500 mb-1">Fecha de Solicitud *</label>
+                                                            <input type="date" name="fechaSolicitud" required value={formData.fechaSolicitud || ''} onChange={handleChangeOrder} className="w-full p-2.5 rounded-lg border border-slate-200 focus:ring-2 focus:ring-indigo-500 bg-white" />
+                                                        </div>
+                                                    </div>
                                                     <div>
-                                                        <label className="block text-xs font-medium text-slate-500 mb-1">Diseño Principal *</label>
+                                                        <label className="block text-xs font-medium text-slate-500 mb-1">Diseño Principal / Proyecto *</label>
                                                         <textarea name="servicio" required rows="2" className="w-full p-2.5 rounded-lg border border-slate-200 focus:ring-2 focus:ring-indigo-500" value={formData.servicio} onChange={handleChangeOrder}></textarea>
                                                     </div>
                                                     <div>
@@ -822,18 +851,19 @@
                                                 </div>
                                             </div>
 
-                                            {/* Derecha */}
                                             <div className="space-y-6">
                                                 <div className="space-y-4">
                                                     <h3 className="text-sm font-bold text-indigo-500 uppercase tracking-wider flex items-center gap-2"><i className="fa-solid fa-dollar-sign"></i> Finanzas</h3>
                                                     <div>
                                                         <label className="block text-xs font-medium text-slate-500 mb-1">Costo Total del Proyecto *</label>
-                                                        <input type="number" name="costoTotal" required min="0" step="0.01" className="w-full p-2.5 rounded-lg border border-slate-200 focus:ring-2 focus:ring-indigo-500 font-bold text-slate-700" value={formData.costoTotal} onChange={handleChangeOrder} />
+                                                        <div className="relative">
+                                                            <span className="absolute left-3 top-2.5 text-slate-400 font-bold">S/</span>
+                                                            <input type="number" name="costoTotal" required min="0" step="0.01" className="w-full pl-8 pr-2.5 py-2.5 rounded-lg border border-slate-200 focus:ring-2 focus:ring-indigo-500 font-bold text-slate-700" value={formData.costoTotal} onChange={handleChangeOrder} />
+                                                        </div>
                                                     </div>
-
                                                     <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 space-y-3 mt-4">
                                                         <div className="flex justify-between items-center">
-                                                            <label className="block text-xs font-bold text-slate-600 uppercase tracking-wider flex items-center gap-1"><i className="fa-solid fa-credit-card text-sm"></i> Historial de Pagos</label>
+                                                            <label className="block text-xs font-bold text-slate-600 uppercase tracking-wider flex items-center gap-1"><i className="fa-solid fa-credit-card text-sm"></i> Pagos / Adelantos</label>
                                                             <button type="button" onClick={handleAddDeposito} className="text-xs bg-indigo-100 text-indigo-700 px-3 py-1.5 rounded-md hover:bg-indigo-200 flex items-center gap-1 font-bold transition-colors">
                                                                 <i className="fa-solid fa-plus text-sm"></i> Añadir
                                                             </button>
@@ -842,36 +872,30 @@
                                                             {formData.depositos?.map((dep, idx) => (
                                                                 <div key={idx} className="flex gap-2 items-center bg-white p-2 rounded-lg border border-slate-200 shadow-sm">
                                                                     <div className="relative flex-1">
-                                                                        <span className="absolute left-3 top-2 text-slate-400 font-bold">S/</span>
+                                                                        <span className="absolute left-3 top-1.5 text-slate-400 font-bold">S/</span>
                                                                         <input type="number" value={dep.monto} onChange={e => handleDepositoChange(idx, 'monto', e.target.value)} placeholder="Monto" className="w-full pl-8 pr-3 py-1.5 text-sm rounded-md border border-slate-200 focus:ring-2 focus:ring-indigo-500 outline-none" />
                                                                     </div>
                                                                     <input type="date" value={dep.fecha} onChange={e => handleDepositoChange(idx, 'fecha', e.target.value)} className="flex-1 px-3 py-1.5 text-sm rounded-md border border-slate-200 focus:ring-2 focus:ring-indigo-500 outline-none" />
                                                                     <button type="button" onClick={() => handleRemoveDeposito(idx)} className="text-red-400 p-1.5 hover:bg-red-50 hover:text-red-600 rounded-md transition-colors"><i className="fa-solid fa-trash"></i></button>
                                                                 </div>
                                                             ))}
-                                                            {(!formData.depositos || formData.depositos.length === 0) && (
-                                                                <p className="text-xs text-slate-400 italic text-center py-4 bg-white border border-dashed border-slate-200 rounded-lg">Aún no se han registrado pagos o adelantos.</p>
-                                                            )}
+                                                            {(!formData.depositos || formData.depositos.length === 0) && (<p className="text-xs text-slate-400 italic text-center py-4 bg-white border border-dashed border-slate-200 rounded-lg">Aún no se han registrado pagos.</p>)}
                                                         </div>
                                                         <div className="flex justify-between items-center pt-2 border-t border-slate-200">
                                                             <span className="text-xs font-medium text-slate-500">Total Abonado:</span><span className="text-sm font-bold text-emerald-600">S/ {formTotalAdelanto.toFixed(2)}</span>
                                                         </div>
                                                     </div>
-                                                    
                                                     <div className="bg-slate-800 text-white p-4 rounded-lg mt-2 flex justify-between items-center shadow-inner">
                                                         <span className="text-sm font-medium opacity-80">Saldo Pendiente:</span>
                                                         <span className="text-2xl font-bold">S/ {((parseFloat(formData.costoTotal) || 0) - formTotalAdelanto).toFixed(2)}</span>
                                                     </div>
                                                 </div>
-
                                                 <div className="space-y-4 pt-4 border-t border-slate-100">
                                                     <h3 className="text-sm font-bold text-indigo-500 uppercase tracking-wider flex items-center gap-2"><i className="fa-solid fa-image"></i> Imágenes</h3>
                                                     <label className="border-2 border-dashed border-slate-300 rounded-lg p-6 flex flex-col items-center justify-center text-slate-500 hover:bg-slate-50 hover:border-indigo-400 transition-colors cursor-pointer">
-                                                        <i className="fa-solid fa-image text-2xl mb-2"></i>
-                                                        <span className="text-sm font-medium">Haz clic para subir imágenes</span>
+                                                        <i className="fa-solid fa-image text-2xl mb-2"></i><span className="text-sm font-medium">Haz clic para subir imágenes</span>
                                                         <input type="file" multiple accept="image/*" className="hidden" onChange={handleImageUpload} />
                                                     </label>
-
                                                     {formData.imagenes && formData.imagenes.length > 0 && (
                                                         <div className="grid grid-cols-3 gap-2 mt-4">
                                                             {formData.imagenes.map((img, idx) => (
@@ -885,7 +909,6 @@
                                                 </div>
                                             </div>
                                         </div>
-
                                         <div className="pt-6 mt-8 border-t border-slate-100 flex justify-end gap-3">
                                             <button type="button" onClick={() => goTo('orders')} className="px-6 py-2.5 rounded-lg border border-slate-200 text-slate-600 font-medium hover:bg-slate-50">Cancelar</button>
                                             <button type="submit" disabled={clientsList.length === 0} className={`px-6 py-2.5 rounded-lg text-white font-medium flex items-center gap-2 ${clientsList.length === 0 ? 'bg-slate-400 cursor-not-allowed' : 'bg-indigo-600 hover:bg-indigo-700'}`}><i className="fa-solid fa-floppy-disk text-lg"></i> Guardar Orden</button>
@@ -903,4 +926,5 @@
         root.render(<App />);
     </script>
 </body>
+</html>
 </html>
