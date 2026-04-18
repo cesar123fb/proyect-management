@@ -65,6 +65,8 @@
             const [statusFilter, setStatusFilter] = useState('Todos');
             const [showFinances, setShowFinances] = useState(true);
             const [financeClientFilter, setFinanceClientFilter] = useState('Todos');
+            const [dashboardClientFilter, setDashboardClientFilter] = useState('Todos'); // Filtro para el Dashboard
+            const [ordersClientFilter, setOrdersClientFilter] = useState('Todos'); // Filtro para Órdenes
 
             // Formularios
             const [formData, setFormData] = useState({
@@ -311,6 +313,7 @@
             // --- Filtros ---
             const filteredOrders = orders.filter(o => 
                 (statusFilter === 'Todos' || o.estado === statusFilter) &&
+                (ordersClientFilter === 'Todos' || o.cliente === ordersClientFilter) &&
                 (o.cliente.toLowerCase().includes(searchTerm.toLowerCase()) ||
                 o.servicio.toLowerCase().includes(searchTerm.toLowerCase()) ||
                 o.id.toLowerCase().includes(searchTerm.toLowerCase()))
@@ -395,9 +398,9 @@
                                                     {o.empresa && <span className="font-bold text-indigo-500 text-xs">{o.empresa}</span>}
                                                 </td>
                                                 <td className="p-3 text-sm text-slate-800">{o.servicio}</td>
-                                                <td className="p-3 text-sm text-right">${o.costoTotal.toFixed(2)}</td>
-                                                <td className="p-3 text-sm text-right text-emerald-600">${o.adelanto.toFixed(2)}</td>
-                                                <td className="p-3 text-sm text-right font-bold text-orange-600">${pendiente.toFixed(2)}</td>
+                                                <td className="p-3 text-sm text-right">S/ {o.costoTotal.toFixed(2)}</td>
+                                                <td className="p-3 text-sm text-right text-emerald-600">S/ {o.adelanto.toFixed(2)}</td>
+                                                <td className="p-3 text-sm text-right font-bold text-orange-600">S/ {pendiente.toFixed(2)}</td>
                                             </tr>
                                         );
                                     })}
@@ -408,7 +411,7 @@
                                 <tfoot>
                                     <tr className="bg-slate-50">
                                         <td colSpan="4" className="p-3 text-right font-bold text-slate-700">TOTAL A PAGAR:</td>
-                                        <td className="p-3 text-right font-bold text-xl text-indigo-600">${clientToPrint.saldoPendiente.toFixed(2)}</td>
+                                        <td className="p-3 text-right font-bold text-xl text-indigo-600">S/ {clientToPrint.saldoPendiente.toFixed(2)}</td>
                                     </tr>
                                 </tfoot>
                             </table>
@@ -468,12 +471,18 @@
 
                                     <div className="mt-6">
                                         <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-100">
-                                            <h3 className="text-lg font-bold text-slate-700 mb-4 flex items-center gap-2"><i className="fa-solid fa-clock text-orange-500 text-xl"></i> Órdenes Pendientes</h3>
+                                            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-4">
+                                                <h3 className="text-lg font-bold text-slate-700 flex items-center gap-2"><i className="fa-solid fa-clock text-orange-500 text-xl"></i> Órdenes Pendientes</h3>
+                                                <select value={dashboardClientFilter} onChange={(e) => setDashboardClientFilter(e.target.value)} className="w-full sm:w-auto p-2 rounded-lg border border-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500 text-sm font-medium text-slate-600 bg-slate-50">
+                                                    <option value="Todos">Todos los clientes</option>
+                                                    {clientsList.map(c => <option key={c.id} value={c.nombre}>{c.nombre}</option>)}
+                                                </select>
+                                            </div>
                                             <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-                                                {orders.filter(o => o.estado === 'Pendiente').length === 0 ? (
+                                                {orders.filter(o => o.estado === 'Pendiente' && (dashboardClientFilter === 'Todos' || o.cliente === dashboardClientFilter)).length === 0 ? (
                                                     <p className="text-slate-500 col-span-full py-4 text-center">No hay órdenes pendientes en este momento.</p>
                                                 ) : (
-                                                    orders.filter(o => o.estado === 'Pendiente').map(o => {
+                                                    orders.filter(o => o.estado === 'Pendiente' && (dashboardClientFilter === 'Todos' || o.cliente === dashboardClientFilter)).map(o => {
                                                         const ultimoPago = o.depositos && o.depositos.length > 0 ? o.depositos[o.depositos.length - 1].fecha : 'Sin pagos';
                                                         return (
                                                             <div key={o.id} className="flex justify-between items-start p-4 hover:bg-slate-50 rounded-lg border border-orange-100 cursor-pointer shadow-sm transition-colors" onClick={() => handleEditOrder(o)}>
@@ -505,6 +514,10 @@
                                                 <option value="Pendiente">🟡 Pendientes</option>
                                                 <option value="Completado">🟢 Completados</option>
                                                 <option value="Cancelado">🔴 Cancelados</option>
+                                            </select>
+                                            <select value={ordersClientFilter} onChange={(e) => setOrdersClientFilter(e.target.value)} className="p-2 rounded-lg border border-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500 text-sm font-medium text-slate-600 bg-slate-50">
+                                                <option value="Todos">Todos los clientes</option>
+                                                {clientsList.map(c => <option key={c.id} value={c.nombre}>{c.nombre}</option>)}
                                             </select>
                                             <div className="relative flex-1 sm:w-64">
                                                 <i className="fa-solid fa-magnifying-glass absolute left-3 top-3 text-slate-400 text-lg"></i>
@@ -546,9 +559,9 @@
                                                     )}
 
                                                     <div className="space-y-1 mb-3 text-sm text-slate-600 border-t border-slate-100 pt-3">
-                                                        <div className="flex justify-between"><span>Costo Total:</span><span>${order.costoTotal.toFixed(2)}</span></div>
-                                                        <div className="flex justify-between"><span className="text-slate-400 text-xs">Adelanto ({order.depositos?.length || 0}):</span><span className="text-emerald-600">${order.adelanto.toFixed(2)}</span></div>
-                                                        <div className="flex justify-between font-bold"><span>Pendiente:</span><span className={pendiente > 0 ? "text-orange-600" : "text-emerald-600"}>${pendiente.toFixed(2)}</span></div>
+                                                        <div className="flex justify-between"><span>Costo Total:</span><span>S/ {order.costoTotal.toFixed(2)}</span></div>
+                                                        <div className="flex justify-between"><span className="text-slate-400 text-xs">Adelanto ({order.depositos?.length || 0}):</span><span className="text-emerald-600">S/ {order.adelanto.toFixed(2)}</span></div>
+                                                        <div className="flex justify-between font-bold"><span>Pendiente:</span><span className={pendiente > 0 ? "text-orange-600" : "text-emerald-600"}>S/ {pendiente.toFixed(2)}</span></div>
                                                     </div>
 
                                                     <div className="flex justify-between items-center text-xs border-t border-slate-100 pt-3">
@@ -612,7 +625,7 @@
                                                 
                                                 <div className="space-y-2 text-sm mb-4 border-t border-slate-100 pt-3">
                                                     <div className="flex justify-between text-slate-600"><span>Total Órdenes:</span> <span className="font-bold">{client.totalPedidos}</span></div>
-                                                    <div className="flex justify-between text-slate-600 bg-orange-50 p-2 rounded"><span className="text-orange-800">Saldo Pendiente:</span> <span className="font-bold text-orange-600">${client.saldoPendiente.toFixed(2)}</span></div>
+                                                    <div className="flex justify-between text-slate-600 bg-orange-50 p-2 rounded"><span className="text-orange-800">Saldo Pendiente:</span> <span className="font-bold text-orange-600">S/ {client.saldoPendiente.toFixed(2)}</span></div>
                                                 </div>
 
                                                 <button onClick={() => handlePrint(client)} className="w-full flex items-center justify-center gap-2 bg-slate-800 hover:bg-slate-700 text-white py-2 rounded-lg text-sm transition-colors">
@@ -696,13 +709,13 @@
                                         <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-100">
                                             <h3 className="text-slate-500 font-medium mb-1">Total Facturado {financeClientFilter !== 'Todos' && `(${financeClientFilter})`}</h3>
                                             <p className={`text-4xl font-bold text-slate-800 ${showFinances ? '' : 'blur-md select-none transition-all'}`}>
-                                                ${orders.filter(o => o.estado !== 'Cancelado').filter(o => financeClientFilter === 'Todos' || o.cliente === financeClientFilter).reduce((sum, o) => sum + o.costoTotal, 0).toFixed(2)}
+                                                S/ {orders.filter(o => o.estado !== 'Cancelado').filter(o => financeClientFilter === 'Todos' || o.cliente === financeClientFilter).reduce((sum, o) => sum + o.costoTotal, 0).toFixed(2)}
                                             </p>
                                         </div>
                                         <div className="bg-orange-50 p-6 rounded-xl shadow-sm border border-orange-100">
                                             <h3 className="text-orange-800 font-medium mb-1">Total Pendiente por Cobrar {financeClientFilter !== 'Todos' && `(${financeClientFilter})`}</h3>
                                             <p className={`text-4xl font-bold text-orange-600 ${showFinances ? '' : 'blur-md select-none transition-all'}`}>
-                                                ${orders.filter(o => o.estado === 'Pendiente').filter(o => financeClientFilter === 'Todos' || o.cliente === financeClientFilter).reduce((sum, o) => sum + (o.costoTotal - o.adelanto), 0).toFixed(2)}
+                                                S/ {orders.filter(o => o.estado === 'Pendiente').filter(o => financeClientFilter === 'Todos' || o.cliente === financeClientFilter).reduce((sum, o) => sum + (o.costoTotal - o.adelanto), 0).toFixed(2)}
                                             </p>
                                         </div>
                                     </div>
@@ -713,7 +726,7 @@
                                             <table className="w-full text-left border-collapse min-w-[600px]">
                                                 <thead>
                                                     <tr className="bg-white text-slate-500 text-sm border-b border-slate-100">
-                                                        <th className="p-4 font-medium">Orden</th><th className="p-4 font-medium">Cliente</th><th className="p-4 font-medium text-right">Costo Total</th>
+                                                        <th className="p-4 font-medium">Cliente</th><th className="p-4 font-medium">Proyecto / Descripción</th><th className="p-4 font-medium text-right">Costo Total</th>
                                                         <th className="p-4 font-medium text-right">Abonado</th><th className="p-4 font-medium text-right">Pendiente</th><th className="p-4 font-medium text-center">Estado</th>
                                                     </tr>
                                                 </thead>
@@ -722,13 +735,14 @@
                                                         const pendiente = o.costoTotal - o.adelanto;
                                                         return (
                                                             <tr key={o.id} className="border-b border-slate-50 hover:bg-slate-50 transition-colors">
-                                                                <td className="p-4 text-sm font-medium text-indigo-600">
-                                                                    {o.id} <br/> {o.empresa && <span className="text-xs text-indigo-400">{o.empresa}</span>}
+                                                                <td className="p-4 text-sm text-slate-800 font-medium">{o.cliente}</td>
+                                                                <td className="p-4 text-sm text-slate-600">
+                                                                    <span className="font-medium text-slate-800 line-clamp-1">{o.servicio}</span>
+                                                                    {o.empresa && <span className="text-xs text-indigo-500 mt-1 block"><i className="fa-solid fa-building"></i> {o.empresa}</span>}
                                                                 </td>
-                                                                <td className="p-4 text-sm text-slate-800">{o.cliente}</td>
-                                                                <td className={`p-4 text-sm text-right ${showFinances ? 'text-slate-600' : 'blur-sm select-none'}`}>${o.costoTotal.toFixed(2)}</td>
-                                                                <td className={`p-4 text-sm text-right ${showFinances ? 'text-emerald-600' : 'blur-sm select-none'}`}>${o.adelanto.toFixed(2)}</td>
-                                                                <td className={`p-4 text-sm text-right font-bold ${showFinances ? (pendiente > 0 ? 'text-orange-600' : 'text-slate-400') : 'blur-sm select-none'}`}>${pendiente.toFixed(2)}</td>
+                                                                <td className={`p-4 text-sm text-right ${showFinances ? 'text-slate-600' : 'blur-sm select-none'}`}>S/ {o.costoTotal.toFixed(2)}</td>
+                                                                <td className={`p-4 text-sm text-right ${showFinances ? 'text-emerald-600' : 'blur-sm select-none'}`}>S/ {o.adelanto.toFixed(2)}</td>
+                                                                <td className={`p-4 text-sm text-right font-bold ${showFinances ? (pendiente > 0 ? 'text-orange-600' : 'text-slate-400') : 'blur-sm select-none'}`}>S/ {pendiente.toFixed(2)}</td>
                                                                 <td className="p-4 text-center"><span className={`text-xs px-2 py-1 rounded-full ${o.estado === 'Pendiente' ? 'bg-orange-100 text-orange-700' : o.estado === 'Completado' ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-700'}`}>{o.estado}</span></td>
                                                             </tr>
                                                         );
@@ -828,8 +842,8 @@
                                                             {formData.depositos?.map((dep, idx) => (
                                                                 <div key={idx} className="flex gap-2 items-center bg-white p-2 rounded-lg border border-slate-200 shadow-sm">
                                                                     <div className="relative flex-1">
-                                                                        <span className="absolute left-3 top-2 text-slate-400">$</span>
-                                                                        <input type="number" value={dep.monto} onChange={e => handleDepositoChange(idx, 'monto', e.target.value)} placeholder="Monto" className="w-full pl-7 pr-3 py-1.5 text-sm rounded-md border border-slate-200 focus:ring-2 focus:ring-indigo-500 outline-none" />
+                                                                        <span className="absolute left-3 top-2 text-slate-400 font-bold">S/</span>
+                                                                        <input type="number" value={dep.monto} onChange={e => handleDepositoChange(idx, 'monto', e.target.value)} placeholder="Monto" className="w-full pl-8 pr-3 py-1.5 text-sm rounded-md border border-slate-200 focus:ring-2 focus:ring-indigo-500 outline-none" />
                                                                     </div>
                                                                     <input type="date" value={dep.fecha} onChange={e => handleDepositoChange(idx, 'fecha', e.target.value)} className="flex-1 px-3 py-1.5 text-sm rounded-md border border-slate-200 focus:ring-2 focus:ring-indigo-500 outline-none" />
                                                                     <button type="button" onClick={() => handleRemoveDeposito(idx)} className="text-red-400 p-1.5 hover:bg-red-50 hover:text-red-600 rounded-md transition-colors"><i className="fa-solid fa-trash"></i></button>
@@ -840,13 +854,13 @@
                                                             )}
                                                         </div>
                                                         <div className="flex justify-between items-center pt-2 border-t border-slate-200">
-                                                            <span className="text-xs font-medium text-slate-500">Total Abonado:</span><span className="text-sm font-bold text-emerald-600">${formTotalAdelanto.toFixed(2)}</span>
+                                                            <span className="text-xs font-medium text-slate-500">Total Abonado:</span><span className="text-sm font-bold text-emerald-600">S/ {formTotalAdelanto.toFixed(2)}</span>
                                                         </div>
                                                     </div>
                                                     
                                                     <div className="bg-slate-800 text-white p-4 rounded-lg mt-2 flex justify-between items-center shadow-inner">
                                                         <span className="text-sm font-medium opacity-80">Saldo Pendiente:</span>
-                                                        <span className="text-2xl font-bold">${((parseFloat(formData.costoTotal) || 0) - formTotalAdelanto).toFixed(2)}</span>
+                                                        <span className="text-2xl font-bold">S/ {((parseFloat(formData.costoTotal) || 0) - formTotalAdelanto).toFixed(2)}</span>
                                                     </div>
                                                 </div>
 
