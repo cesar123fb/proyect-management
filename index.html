@@ -28,10 +28,9 @@
     <div id="root"></div>
 
     <script type="text/babel">
-        // Extraemos Hooks de React
         const { useState, useMemo, useEffect } = React;
 
-        // --- CONFIGURACIÓN DE FIREBASE (Con tus claves) ---
+        // --- CONFIGURACIÓN DE FIREBASE ---
         const firebaseConfig = {
             apiKey: "AIzaSyAe0UIel7Q-0LJZhH4mexFA2KqXpP5xU_M",
             authDomain: "proyect-management-c27ab.firebaseapp.com",
@@ -42,7 +41,6 @@
             measurementId: "G-FFWQE1M6XE"
         };
 
-        // Inicializar Firebase
         if (!firebase.apps.length) {
             firebase.initializeApp(firebaseConfig);
         }
@@ -51,11 +49,13 @@
         const appId = 'mi-app-diseno';
 
         function App() {
+            // Estados Principales
             const [orders, setOrders] = useState([]);
+            const [clientsList, setClientsList] = useState([]); // <- Nueva base de datos de Clientes
             const [user, setUser] = useState(null);
             const [loadingData, setLoadingData] = useState(true);
             
-            const [modal, setModal] = useState({ isOpen: false, type: '', message: '', data: null });
+            const [modal, setModal] = useState({ isOpen: false, type: '', message: '', data: null, actionType: '' });
 
             const [view, setView] = useState('dashboard');
             const [searchTerm, setSearchTerm] = useState('');
@@ -66,161 +66,119 @@
             const [showFinances, setShowFinances] = useState(true);
             const [financeClientFilter, setFinanceClientFilter] = useState('Todos');
 
+            // Formularios
             const [formData, setFormData] = useState({
-                cliente: '', telefono: '', servicio: '', extras: '',
+                cliente: '', empresa: '', telefono: '', servicio: '', extras: '',
                 costoTotal: '', depositos: [], estado: 'Pendiente', imagenes: []
             });
 
-            // 1. Autenticación Anónima
-            useEffect(() => {
-                auth.signInAnonymously().catch(error => {
-                    console.error("Error de autenticación:", error);
-                });
+            const [clientFormData, setClientFormData] = useState({
+                nombre: '', telefono: '', empresas: ['']
+            });
 
-                const unsubscribe = auth.onAuthStateChanged((currentUser) => {
-                    setUser(currentUser);
-                });
+            // 1. Autenticación
+            useEffect(() => {
+                auth.signInAnonymously().catch(error => console.error("Error de autenticación:", error));
+                const unsubscribe = auth.onAuthStateChanged((currentUser) => setUser(currentUser));
                 return () => unsubscribe();
             }, []);
 
-            // 2. Cargar datos desde Firestore
+            // 2. Cargar datos desde Firestore (Órdenes y Clientes)
             useEffect(() => {
                 if (!user) return;
-                
                 setLoadingData(true);
-                const ordersRef = db.collection('artifacts').doc(appId).collection('users').doc(user.uid).collection('orders');
                 
-                const unsubscribe = ordersRef.onSnapshot((snapshot) => {
-                    const fetchedOrders = snapshot.docs.map(doc => ({
-                        id: doc.id,
-                        ...doc.data()
-                    }));
-                    
+                // Cargar Órdenes
+                const ordersRef = db.collection('artifacts').doc(appId).collection('users').doc(user.uid).collection('orders');
+                const unsubscribeOrders = ordersRef.onSnapshot((snapshot) => {
+                    const fetchedOrders = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
                     fetchedOrders.sort((a, b) => b.id.localeCompare(a.id));
                     setOrders(fetchedOrders);
+                }, (error) => console.error(error));
+
+                // Cargar Clientes
+                const clientsRef = db.collection('artifacts').doc(appId).collection('users').doc(user.uid).collection('clients');
+                const unsubscribeClients = clientsRef.onSnapshot((snapshot) => {
+                    const fetchedClients = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                    // Ordenar clientes alfabéticamente
+                    fetchedClients.sort((a, b) => a.nombre.localeCompare(b.nombre));
+                    setClientsList(fetchedClients);
                     setLoadingData(false);
                 }, (error) => {
-                    console.error("Error al obtener datos:", error);
-                    setModal({ isOpen: true, type: 'alert', message: 'Error al conectar con la base de datos.' });
+                    console.error("Error al obtener clientes:", error);
                     setLoadingData(false);
                 });
 
-                return () => unsubscribe();
+                return () => {
+                    unsubscribeOrders();
+                    unsubscribeClients();
+                };
             }, [user]);
 
-            // Estadísticas derivadas
+            // --- Cálculos y Estadísticas ---
             const stats = useMemo(() => {
-                const clientsCount = new Set(orders.map(o => o.cliente)).size;
+                const clientsCount = clientsList.length;
                 const activeCount = orders.filter(o => o.estado === 'Pendiente').length;
                 const completedCount = orders.filter(o => o.estado === 'Completado').length;
                 const cancelledCount = orders.filter(o => o.estado === 'Cancelado').length;
                 const totalRevenue = orders.filter(o => o.estado !== 'Cancelado').reduce((sum, o) => sum + o.costoTotal, 0);
                 const pendingMoney = orders.filter(o => o.estado === 'Pendiente').reduce((sum, o) => sum + (o.costoTotal - o.adelanto), 0);
                 return { clientsCount, activeCount, completedCount, cancelledCount, totalRevenue, pendingMoney };
-            }, [orders]);
+            }, [orders, clientsList]);
 
-            const clientsData = useMemo(() => {
-                const clientsMap = {};
-                orders.forEach(o => {
-                    if (!clientsMap[o.cliente]) {
-                        clientsMap[o.cliente] = { nombre: o.cliente, telefono: o.telefono, totalPedidos: 0, saldoPendiente: 0, ordenes: [] };
-                    }
-                    clientsMap[o.cliente].totalPedidos++;
-                    clientsMap[o.cliente].ordenes.push(o);
-                    if (o.estado === 'Pendiente') {
-                        clientsMap[o.cliente].saldoPendiente += (o.costoTotal - o.adelanto);
-                    }
+            // Unir datos de clientes con sus órdenes
+            const clientsWithStats = useMemo(() => {
+                return clientsList.map(client => {
+                    const clientOrders = orders.filter(o => o.cliente === client.nombre);
+                    const totalPedidos = clientOrders.length;
+                    const saldoPendiente = clientOrders.filter(o => o.estado === 'Pendiente').reduce((sum, o) => sum + (o.costoTotal - o.adelanto), 0);
+                    return { ...client, totalPedidos, saldoPendiente, ordenes: clientOrders };
                 });
-                return Object.values(clientsMap);
-            }, [orders]);
+            }, [clientsList, orders]);
 
-            // Manejadores
+            // --- Navegación ---
             const goTo = (newView) => { setView(newView); setSearchTerm(''); };
 
+            // --- Manejadores de ÓRDENES ---
             const handleNewOrder = () => {
                 setFormData({
-                    cliente: '', telefono: '', servicio: '', extras: '', costoTotal: '',
+                    cliente: '', empresa: '', telefono: '', servicio: '', extras: '', costoTotal: '',
                     depositos: [], estado: 'Pendiente', imagenes: []
                 });
                 setEditingId(null);
                 goTo('form');
             };
 
-            const handleEdit = (order) => {
-                const orderToEdit = { ...order, depositos: order.depositos || [] };
-                setFormData(orderToEdit);
+            const handleEditOrder = (order) => {
+                setFormData({ ...order, depositos: order.depositos || [] });
                 setEditingId(order.id);
                 goTo('form');
             };
 
-            const requestDelete = (id) => {
-                setModal({ isOpen: true, type: 'confirm', message: '¿Estás seguro de que deseas eliminar esta orden? Esta acción no se puede deshacer.', data: id });
-            };
-
-            const confirmModalAction = async () => {
-                if (modal.type === 'confirm' && modal.data && user) {
-                    try {
-                        await db.collection('artifacts').doc(appId).collection('users').doc(user.uid).collection('orders').doc(modal.data).delete();
-                    } catch (error) {
-                        console.error("Error al eliminar:", error);
-                        setModal({ isOpen: true, type: 'alert', message: 'Hubo un problema al eliminar la orden.' });
-                        return;
-                    }
-                }
-                setModal({ isOpen: false, type: '', message: '', data: null });
-            };
-
-            const handleChange = (e) => {
+            const handleChangeOrder = (e) => {
                 const { name, value } = e.target;
-                setFormData(prev => ({ ...prev, [name]: value }));
+                
+                // Si cambian el cliente, auto-llenamos el teléfono y reseteamos la empresa
+                if (name === 'cliente') {
+                    const selectedClient = clientsList.find(c => c.nombre === value);
+                    setFormData(prev => ({ 
+                        ...prev, 
+                        cliente: value, 
+                        empresa: '', 
+                        telefono: selectedClient ? selectedClient.telefono : prev.telefono 
+                    }));
+                } else {
+                    setFormData(prev => ({ ...prev, [name]: value }));
+                }
             };
 
-            // Pagos / Depósitos
-            const handleAddDeposito = () => {
-                setFormData(prev => ({
-                    ...prev,
-                    depositos: [...(prev.depositos || []), { monto: '', fecha: new Date().toISOString().split('T')[0] }]
-                }));
-            };
-
-            const handleDepositoChange = (index, field, value) => {
-                const newDepositos = [...(formData.depositos || [])];
-                newDepositos[index] = { ...newDepositos[index], [field]: value };
-                setFormData(prev => ({ ...prev, depositos: newDepositos }));
-            };
-
-            const handleRemoveDeposito = (index) => {
-                setFormData(prev => ({ ...prev, depositos: (prev.depositos || []).filter((_, i) => i !== index) }));
-            };
-
-            const handleImageUpload = (e) => {
-                const files = Array.from(e.target.files);
-                Promise.all(files.map(file => {
-                    return new Promise((resolve, reject) => {
-                        const reader = new FileReader();
-                        reader.readAsDataURL(file);
-                        reader.onload = () => resolve(reader.result);
-                        reader.onerror = error => reject(error);
-                    });
-                })).then(base64Images => {
-                    setFormData(prev => ({ ...prev, imagenes: [...(prev.imagenes || []), ...base64Images] }));
-                });
-            };
-
-            const removeImage = (index) => {
-                setFormData(prev => ({ ...prev, imagenes: prev.imagenes.filter((_, i) => i !== index) }));
-            };
-
-            const handleSave = async (e) => {
+            const handleSaveOrder = async (e) => {
                 e.preventDefault();
                 if (!formData.cliente || !formData.servicio || !formData.costoTotal) {
                     setModal({ isOpen: true, type: 'alert', message: 'Por favor, llena los campos obligatorios.' }); 
                     return;
                 }
-                if (!user) {
-                    setModal({ isOpen: true, type: 'alert', message: 'No hay conexión con la base de datos.' }); 
-                    return;
-                }
+                if (!user) return;
 
                 const totalAdelanto = (formData.depositos || []).reduce((sum, dep) => sum + (parseFloat(dep.monto) || 0), 0);
                 const orderData = {
@@ -234,16 +192,123 @@
                     await db.collection('artifacts').doc(appId).collection('users').doc(user.uid).collection('orders').doc(newId).set({ ...orderData, id: newId });
                     goTo('orders');
                 } catch (error) {
-                    console.error("Error al guardar:", error);
-                    setModal({ isOpen: true, type: 'alert', message: 'Ocurrió un error al guardar los datos en la nube.' });
+                    setModal({ isOpen: true, type: 'alert', message: 'Ocurrió un error al guardar.' });
                 }
             };
 
+            // --- Manejadores de CLIENTES ---
+            const handleNewClient = () => {
+                setClientFormData({ nombre: '', telefono: '', empresas: [''] });
+                setEditingId(null);
+                goTo('client-form');
+            };
+
+            const handleEditClient = (client) => {
+                setClientFormData({
+                    nombre: client.nombre,
+                    telefono: client.telefono || '',
+                    empresas: client.empresas && client.empresas.length > 0 ? client.empresas : ['']
+                });
+                setEditingId(client.id);
+                goTo('client-form');
+            };
+
+            const handleClientChange = (e) => {
+                const { name, value } = e.target;
+                setClientFormData(prev => ({ ...prev, [name]: value }));
+            };
+
+            const handleAddEmpresa = () => {
+                setClientFormData(prev => ({ ...prev, empresas: [...prev.empresas, ''] }));
+            };
+
+            const handleEmpresaChange = (index, value) => {
+                const newEmpresas = [...clientFormData.empresas];
+                newEmpresas[index] = value;
+                setClientFormData(prev => ({ ...prev, empresas: newEmpresas }));
+            };
+
+            const handleRemoveEmpresa = (index) => {
+                setClientFormData(prev => ({ ...prev, empresas: prev.empresas.filter((_, i) => i !== index) }));
+            };
+
+            const handleSaveClient = async (e) => {
+                e.preventDefault();
+                if (!clientFormData.nombre) {
+                    setModal({ isOpen: true, type: 'alert', message: 'El nombre del cliente es obligatorio.' }); 
+                    return;
+                }
+                if (!user) return;
+
+                // Limpiar empresas vacías
+                const cleanEmpresas = clientFormData.empresas.filter(emp => emp.trim() !== '');
+
+                const clientData = {
+                    nombre: clientFormData.nombre,
+                    telefono: clientFormData.telefono,
+                    empresas: cleanEmpresas
+                };
+
+                try {
+                    const newId = editingId || `CLI-${Math.floor(Math.random() * 10000).toString().padStart(4, '0')}`;
+                    await db.collection('artifacts').doc(appId).collection('users').doc(user.uid).collection('clients').doc(newId).set({ ...clientData, id: newId });
+                    goTo('clients');
+                } catch (error) {
+                    setModal({ isOpen: true, type: 'alert', message: 'Ocurrió un error al guardar el cliente.' });
+                }
+            };
+
+            // --- ELIMINAR REGISTROS ---
+            const requestDelete = (type, id) => {
+                const message = type === 'order' 
+                    ? '¿Estás seguro de que deseas eliminar esta orden?'
+                    : '¿Estás seguro de que deseas eliminar a este cliente? Sus órdenes asociadas no se borrarán, pero perderán el vínculo con sus empresas.';
+                
+                setModal({ isOpen: true, type: 'confirm', message, data: id, actionType: type });
+            };
+
+            const confirmModalAction = async () => {
+                if (modal.type === 'confirm' && modal.data && user) {
+                    try {
+                        const collectionName = modal.actionType === 'order' ? 'orders' : 'clients';
+                        await db.collection('artifacts').doc(appId).collection('users').doc(user.uid).collection(collectionName).doc(modal.data).delete();
+                    } catch (error) {
+                        setModal({ isOpen: true, type: 'alert', message: 'Hubo un problema al eliminar el registro.' });
+                        return;
+                    }
+                }
+                setModal({ isOpen: false, type: '', message: '', data: null, actionType: '' });
+            };
+
+            // --- Otros Manejadores ---
             const handlePrint = (client) => {
                 setClientToPrint(client);
                 setTimeout(() => { window.print(); setClientToPrint(null); }, 500);
             };
 
+            // Helpers de Depósitos e Imágenes
+            const handleAddDeposito = () => setFormData(prev => ({...prev, depositos: [...(prev.depositos || []), { monto: '', fecha: new Date().toISOString().split('T')[0] }]}));
+            const handleDepositoChange = (index, field, value) => {
+                const newDepositos = [...(formData.depositos || [])];
+                newDepositos[index] = { ...newDepositos[index], [field]: value };
+                setFormData(prev => ({ ...prev, depositos: newDepositos }));
+            };
+            const handleRemoveDeposito = (index) => setFormData(prev => ({ ...prev, depositos: (prev.depositos || []).filter((_, i) => i !== index) }));
+            
+            const handleImageUpload = (e) => {
+                const files = Array.from(e.target.files);
+                Promise.all(files.map(file => {
+                    return new Promise((resolve, reject) => {
+                        const reader = new FileReader();
+                        reader.readAsDataURL(file);
+                        reader.onload = () => resolve(reader.result);
+                        reader.onerror = error => reject(error);
+                    });
+                })).then(base64Images => setFormData(prev => ({ ...prev, imagenes: [...(prev.imagenes || []), ...base64Images] })));
+            };
+            const removeImage = (index) => setFormData(prev => ({ ...prev, imagenes: prev.imagenes.filter((_, i) => i !== index) }));
+
+            // --- Filtros ---
             const filteredOrders = orders.filter(o => 
                 (statusFilter === 'Todos' || o.estado === statusFilter) &&
                 (o.cliente.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -251,11 +316,15 @@
                 o.id.toLowerCase().includes(searchTerm.toLowerCase()))
             );
 
-            const filteredClients = clientsData.filter(c => 
+            const filteredClients = clientsWithStats.filter(c => 
                 c.nombre.toLowerCase().includes(searchTerm.toLowerCase())
             );
 
             const formTotalAdelanto = (formData.depositos || []).reduce((sum, dep) => sum + (parseFloat(dep.monto) || 0), 0);
+
+            // Determinar empresas del cliente seleccionado (Para el formulario de órdenes)
+            const selectedClientData = clientsList.find(c => c.nombre === formData.cliente);
+            const clientCompanies = selectedClientData?.empresas || [];
 
             if (loadingData) {
                 return (
@@ -269,20 +338,18 @@
             return (
                 <div className="min-h-screen">
                     
-                    {/* Modal Personalizado */}
+                    {/* Modal Confirmación/Alerta */}
                     {modal.isOpen && (
                         <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-[100] flex items-center justify-center p-4">
                             <div className="bg-white rounded-xl shadow-xl max-w-md w-full p-6">
                                 <div className="flex items-center gap-3 mb-4">
                                     {modal.type === 'alert' ? <i className="fa-solid fa-circle-exclamation text-orange-500 text-2xl"></i> : <i className="fa-solid fa-circle-exclamation text-red-500 text-2xl"></i>}
-                                    <h3 className="text-lg font-bold text-slate-800">
-                                        {modal.type === 'alert' ? 'Aviso' : 'Confirmar Acción'}
-                                    </h3>
+                                    <h3 className="text-lg font-bold text-slate-800">{modal.type === 'alert' ? 'Aviso' : 'Confirmar Acción'}</h3>
                                 </div>
                                 <p className="text-slate-600 mb-6">{modal.message}</p>
                                 <div className="flex justify-end gap-3">
                                     {modal.type === 'confirm' && (
-                                        <button onClick={() => setModal({ isOpen: false, type: '', message: '', data: null })} className="px-4 py-2 rounded-lg text-slate-600 font-medium hover:bg-slate-100 transition-colors">Cancelar</button>
+                                        <button onClick={() => setModal({ isOpen: false })} className="px-4 py-2 rounded-lg text-slate-600 font-medium hover:bg-slate-100 transition-colors">Cancelar</button>
                                     )}
                                     <button onClick={confirmModalAction} className={`px-4 py-2 rounded-lg font-medium text-white transition-colors ${modal.type === 'alert' ? 'bg-indigo-600 hover:bg-indigo-700' : 'bg-red-600 hover:bg-red-700'}`}>
                                         {modal.type === 'alert' ? 'Entendido' : 'Sí, eliminar'}
@@ -292,7 +359,7 @@
                         </div>
                     )}
 
-                    {/* Vista de Impresión (PDF) */}
+                    {/* VISTA DE IMPRESIÓN (PDF) */}
                     {clientToPrint && (
                         <div className="hidden print:block absolute top-0 left-0 w-full bg-white p-8 z-50">
                             <div className="border-b-2 border-indigo-600 pb-6 mb-6 flex justify-between items-end">
@@ -311,7 +378,7 @@
                             <table className="w-full text-left border-collapse">
                                 <thead>
                                     <tr className="bg-slate-100 text-slate-700">
-                                        <th className="p-3 border-b">ID Orden</th>
+                                        <th className="p-3 border-b">ID Orden / Empresa</th>
                                         <th className="p-3 border-b">Servicio</th>
                                         <th className="p-3 border-b text-right">Costo Total</th>
                                         <th className="p-3 border-b text-right">Abonado</th>
@@ -323,7 +390,10 @@
                                         const pendiente = o.costoTotal - o.adelanto;
                                         return (
                                             <tr key={o.id} className="border-b">
-                                                <td className="p-3 text-sm text-slate-600">{o.id}</td>
+                                                <td className="p-3 text-sm text-slate-600">
+                                                    {o.id} <br/>
+                                                    {o.empresa && <span className="font-bold text-indigo-500 text-xs">{o.empresa}</span>}
+                                                </td>
                                                 <td className="p-3 text-sm text-slate-800">{o.servicio}</td>
                                                 <td className="p-3 text-sm text-right">${o.costoTotal.toFixed(2)}</td>
                                                 <td className="p-3 text-sm text-right text-emerald-600">${o.adelanto.toFixed(2)}</td>
@@ -345,7 +415,7 @@
                         </div>
                     )}
 
-                    {/* Interfaz Principal */}
+                    {/* INTERFAZ PRINCIPAL */}
                     <div className="print:hidden">
                         <nav className="bg-indigo-600 text-white p-4 shadow-md sticky top-0 z-40">
                             <div className="max-w-6xl mx-auto flex flex-col sm:flex-row justify-between items-center gap-4">
@@ -360,7 +430,7 @@
                                     <button onClick={() => goTo('orders')} className={`px-4 py-2 rounded-md flex items-center gap-2 text-sm font-medium transition-colors ${view === 'orders' || view === 'form' ? 'bg-white text-indigo-700 shadow' : 'text-indigo-100 hover:text-white hover:bg-indigo-600'}`}>
                                         <i className="fa-solid fa-file-lines"></i> <span className="hidden sm:inline">Órdenes</span>
                                     </button>
-                                    <button onClick={() => goTo('clients')} className={`px-4 py-2 rounded-md flex items-center gap-2 text-sm font-medium transition-colors ${view === 'clients' ? 'bg-white text-indigo-700 shadow' : 'text-indigo-100 hover:text-white hover:bg-indigo-600'}`}>
+                                    <button onClick={() => goTo('clients')} className={`px-4 py-2 rounded-md flex items-center gap-2 text-sm font-medium transition-colors ${view === 'clients' || view === 'client-form' ? 'bg-white text-indigo-700 shadow' : 'text-indigo-100 hover:text-white hover:bg-indigo-600'}`}>
                                         <i className="fa-solid fa-users"></i> <span className="hidden sm:inline">Clientes</span>
                                     </button>
                                     <button onClick={() => goTo('finances')} className={`px-4 py-2 rounded-md flex items-center gap-2 text-sm font-medium transition-colors ${view === 'finances' ? 'bg-white text-indigo-700 shadow' : 'text-indigo-100 hover:text-white hover:bg-indigo-600'}`}>
@@ -406,9 +476,10 @@
                                                     orders.filter(o => o.estado === 'Pendiente').map(o => {
                                                         const ultimoPago = o.depositos && o.depositos.length > 0 ? o.depositos[o.depositos.length - 1].fecha : 'Sin pagos';
                                                         return (
-                                                            <div key={o.id} className="flex justify-between items-start p-4 hover:bg-slate-50 rounded-lg border border-orange-100 cursor-pointer shadow-sm transition-colors" onClick={() => handleEdit(o)}>
+                                                            <div key={o.id} className="flex justify-between items-start p-4 hover:bg-slate-50 rounded-lg border border-orange-100 cursor-pointer shadow-sm transition-colors" onClick={() => handleEditOrder(o)}>
                                                                 <div>
                                                                     <p className="font-bold text-sm text-slate-800">{o.cliente}</p>
+                                                                    {o.empresa && <p className="text-xs font-medium text-indigo-500 mb-1"><i className="fa-solid fa-building"></i> {o.empresa}</p>}
                                                                     <p className="text-xs text-slate-500 mt-1 line-clamp-2">{o.servicio}</p>
                                                                     <span className="text-xs text-slate-400 mt-2 flex items-center gap-1"><i className="fa-solid fa-calendar text-xs"></i> Último pago: {ultimoPago}</span>
                                                                 </div>
@@ -440,7 +511,7 @@
                                                 <input type="text" placeholder="Buscar orden..." className="w-full pl-10 pr-4 py-2 rounded-lg border border-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500" value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} />
                                             </div>
                                             <button onClick={handleNewOrder} className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg flex items-center gap-2 transition-colors">
-                                                <i className="fa-solid fa-plus text-lg"></i> <span className="hidden sm:inline">Nueva</span>
+                                                <i className="fa-solid fa-plus text-lg"></i> <span className="hidden sm:inline">Nueva Orden</span>
                                             </button>
                                         </div>
                                     </div>
@@ -456,13 +527,14 @@
                                             return (
                                                 <div key={order.id} className={`bg-white rounded-xl shadow-sm border-l-4 p-5 relative group ${order.estado === 'Pendiente' ? 'border-l-orange-400' : order.estado === 'Completado' ? 'border-l-emerald-400' : 'border-l-red-400'} border-t border-r border-b border-slate-100`}>
                                                     <div className="absolute top-4 right-4 flex gap-2">
-                                                        <button onClick={() => handleEdit(order)} className="p-1.5 bg-slate-50 text-slate-600 rounded-md hover:bg-indigo-50 hover:text-indigo-600"><i className="fa-solid fa-pen"></i></button>
-                                                        <button onClick={() => requestDelete(order.id)} className="p-1.5 bg-slate-50 text-slate-600 rounded-md hover:bg-red-50 hover:text-red-600"><i className="fa-solid fa-trash"></i></button>
+                                                        <button onClick={() => handleEditOrder(order)} className="p-1.5 bg-slate-50 text-slate-600 rounded-md hover:bg-indigo-50 hover:text-indigo-600"><i className="fa-solid fa-pen"></i></button>
+                                                        <button onClick={() => requestDelete('order', order.id)} className="p-1.5 bg-slate-50 text-slate-600 rounded-md hover:bg-red-50 hover:text-red-600"><i className="fa-solid fa-trash"></i></button>
                                                     </div>
 
                                                     <div className="mb-3">
                                                         <span className="text-xs font-bold text-slate-400">{order.id}</span>
                                                         <h3 className="font-bold text-lg mt-1 text-slate-800">{order.cliente}</h3>
+                                                        {order.empresa && <p className="text-xs font-medium text-indigo-500 mb-1"><i className="fa-solid fa-building"></i> {order.empresa}</p>}
                                                         <p className="text-sm text-slate-500 line-clamp-1">{order.servicio}</p>
                                                     </div>
 
@@ -490,29 +562,55 @@
                                 </div>
                             )}
 
-                            {/* CLIENTES */}
+                            {/* CLIENTES (LISTA) */}
                             {view === 'clients' && (
                                 <div className="space-y-6">
                                     <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 bg-white p-4 rounded-xl shadow-sm border border-slate-100">
                                         <h2 className="text-xl font-bold text-slate-700">Directorio de Clientes</h2>
-                                        <div className="relative w-full sm:w-72">
-                                            <i className="fa-solid fa-magnifying-glass absolute left-3 top-3 text-slate-400 text-lg"></i>
-                                            <input type="text" placeholder="Buscar cliente..." className="w-full pl-10 pr-4 py-2 rounded-lg border border-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500" value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} />
+                                        <div className="flex flex-wrap sm:flex-nowrap gap-2 w-full sm:w-auto">
+                                            <div className="relative flex-1 sm:w-64">
+                                                <i className="fa-solid fa-magnifying-glass absolute left-3 top-3 text-slate-400 text-lg"></i>
+                                                <input type="text" placeholder="Buscar cliente..." className="w-full pl-10 pr-4 py-2 rounded-lg border border-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500" value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} />
+                                            </div>
+                                            <button onClick={handleNewClient} className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg flex items-center gap-2 transition-colors">
+                                                <i className="fa-solid fa-plus text-lg"></i> <span className="hidden sm:inline">Nuevo Cliente</span>
+                                            </button>
                                         </div>
                                     </div>
 
                                     <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-                                        {filteredClients.map((client, i) => (
-                                            <div key={i} className="bg-white rounded-xl shadow-sm border border-slate-100 p-5 hover:border-indigo-200 transition-colors">
-                                                <div className="flex items-start justify-between mb-4">
+                                        {filteredClients.length === 0 && (
+                                            <p className="text-slate-500 col-span-full text-center py-8">No se encontraron clientes registrados.</p>
+                                        )}
+                                        {filteredClients.map((client) => (
+                                            <div key={client.id} className="bg-white rounded-xl shadow-sm border border-slate-100 p-5 hover:border-indigo-200 transition-colors relative group">
+                                                <div className="absolute top-4 right-4 flex gap-2">
+                                                    <button onClick={() => handleEditClient(client)} className="p-1.5 bg-slate-50 text-slate-600 rounded-md hover:bg-indigo-50 hover:text-indigo-600"><i className="fa-solid fa-pen"></i></button>
+                                                    <button onClick={() => requestDelete('client', client.id)} className="p-1.5 bg-slate-50 text-slate-600 rounded-md hover:bg-red-50 hover:text-red-600"><i className="fa-solid fa-trash"></i></button>
+                                                </div>
+
+                                                <div className="flex items-start justify-between mb-4 pr-16">
                                                     <div>
                                                         <h3 className="font-bold text-lg text-slate-800">{client.nombre}</h3>
-                                                        <p className="text-sm text-slate-500">{client.telefono || 'Sin teléfono'}</p>
+                                                        <p className="text-sm text-slate-500"><i className="fa-solid fa-phone text-xs"></i> {client.telefono || 'Sin teléfono'}</p>
                                                     </div>
-                                                    <div className="bg-indigo-50 text-indigo-600 p-2 rounded-full"><i className="fa-solid fa-user text-lg"></i></div>
+                                                </div>
+
+                                                {/* Lista de Empresas */}
+                                                <div className="mb-4">
+                                                    <p className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-1">Empresas Asignadas:</p>
+                                                    {client.empresas && client.empresas.length > 0 ? (
+                                                        <div className="flex flex-wrap gap-1">
+                                                            {client.empresas.map((emp, i) => (
+                                                                <span key={i} className="text-xs bg-slate-100 text-slate-600 px-2 py-1 rounded-md border border-slate-200"><i className="fa-solid fa-building mr-1"></i>{emp}</span>
+                                                            ))}
+                                                        </div>
+                                                    ) : (
+                                                        <p className="text-xs text-slate-400 italic">No tiene empresas registradas</p>
+                                                    )}
                                                 </div>
                                                 
-                                                <div className="space-y-2 text-sm mb-4">
+                                                <div className="space-y-2 text-sm mb-4 border-t border-slate-100 pt-3">
                                                     <div className="flex justify-between text-slate-600"><span>Total Órdenes:</span> <span className="font-bold">{client.totalPedidos}</span></div>
                                                     <div className="flex justify-between text-slate-600 bg-orange-50 p-2 rounded"><span className="text-orange-800">Saldo Pendiente:</span> <span className="font-bold text-orange-600">${client.saldoPendiente.toFixed(2)}</span></div>
                                                 </div>
@@ -526,6 +624,55 @@
                                 </div>
                             )}
 
+                            {/* CLIENTES (FORMULARIO) */}
+                            {view === 'client-form' && (
+                                <div className="bg-white rounded-xl shadow-lg border border-slate-100 overflow-hidden max-w-2xl mx-auto">
+                                    <div className="bg-slate-50 px-6 py-4 border-b border-slate-100 flex items-center gap-3">
+                                        <button onClick={() => goTo('clients')} className="p-2 hover:bg-slate-200 rounded-full text-slate-500"><i className="fa-solid fa-arrow-left text-lg"></i></button>
+                                        <h2 className="text-xl font-bold text-slate-700">{editingId ? 'Editar Cliente' : 'Nuevo Cliente'}</h2>
+                                    </div>
+
+                                    <form onSubmit={handleSaveClient} className="p-6 space-y-6">
+                                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                            <div>
+                                                <label className="block text-xs font-medium text-slate-500 mb-1">Nombre Completo *</label>
+                                                <input type="text" name="nombre" required className="w-full p-2.5 rounded-lg border border-slate-200 focus:ring-2 focus:ring-indigo-500" value={clientFormData.nombre} onChange={handleClientChange} />
+                                            </div>
+                                            <div>
+                                                <label className="block text-xs font-medium text-slate-500 mb-1">Teléfono</label>
+                                                <input type="tel" name="telefono" className="w-full p-2.5 rounded-lg border border-slate-200 focus:ring-2 focus:ring-indigo-500" value={clientFormData.telefono} onChange={handleClientChange} />
+                                            </div>
+                                        </div>
+
+                                        <div className="bg-slate-50 p-4 rounded-xl border border-slate-200">
+                                            <div className="flex justify-between items-center mb-3">
+                                                <label className="block text-xs font-bold text-slate-600 uppercase tracking-wider flex items-center gap-1"><i className="fa-solid fa-building text-sm"></i> Empresas del Cliente</label>
+                                                <button type="button" onClick={handleAddEmpresa} className="text-xs bg-indigo-100 text-indigo-700 px-3 py-1.5 rounded-md hover:bg-indigo-200 flex items-center gap-1 font-bold transition-colors">
+                                                    <i className="fa-solid fa-plus text-sm"></i> Añadir Empresa
+                                                </button>
+                                            </div>
+                                            
+                                            <div className="space-y-2">
+                                                {clientFormData.empresas.map((emp, idx) => (
+                                                    <div key={idx} className="flex gap-2 items-center">
+                                                        <input type="text" value={emp} onChange={(e) => handleEmpresaChange(idx, e.target.value)} placeholder={`Nombre de la Empresa ${idx + 1}`} className="w-full p-2 text-sm rounded-lg border border-slate-200 focus:ring-2 focus:ring-indigo-500 outline-none" />
+                                                        <button type="button" onClick={() => handleRemoveEmpresa(idx)} className="text-red-400 p-2 hover:bg-red-50 hover:text-red-600 rounded-md transition-colors"><i className="fa-solid fa-trash"></i></button>
+                                                    </div>
+                                                ))}
+                                                {clientFormData.empresas.length === 0 && (
+                                                    <p className="text-xs text-slate-400 italic text-center py-2">No se han añadido empresas.</p>
+                                                )}
+                                            </div>
+                                        </div>
+
+                                        <div className="pt-4 border-t border-slate-100 flex justify-end gap-3">
+                                            <button type="button" onClick={() => goTo('clients')} className="px-6 py-2.5 rounded-lg border border-slate-200 text-slate-600 font-medium hover:bg-slate-50">Cancelar</button>
+                                            <button type="submit" className="px-6 py-2.5 rounded-lg bg-indigo-600 text-white font-medium hover:bg-indigo-700 flex items-center gap-2"><i className="fa-solid fa-floppy-disk text-lg"></i> Guardar Cliente</button>
+                                        </div>
+                                    </form>
+                                </div>
+                            )}
+
                             {/* FINANZAS */}
                             {view === 'finances' && (
                                 <div className="space-y-6">
@@ -536,7 +683,7 @@
                                                 <i className="fa-solid fa-filter absolute left-3 top-3 text-slate-400"></i>
                                                 <select value={financeClientFilter} onChange={(e) => setFinanceClientFilter(e.target.value)} className="w-full pl-10 pr-4 py-2 rounded-lg border border-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500 appearance-none bg-white text-sm">
                                                     <option value="Todos">Todos los clientes</option>
-                                                    {Array.from(new Set(orders.map(o => o.cliente))).map(c => <option key={c} value={c}>{c}</option>)}
+                                                    {clientsList.map(c => <option key={c.id} value={c.nombre}>{c.nombre}</option>)}
                                                 </select>
                                             </div>
                                             <button onClick={() => setShowFinances(!showFinances)} className="bg-slate-100 hover:bg-slate-200 text-slate-600 px-4 py-2 rounded-lg flex items-center gap-2 transition-colors border border-slate-200">
@@ -575,7 +722,10 @@
                                                         const pendiente = o.costoTotal - o.adelanto;
                                                         return (
                                                             <tr key={o.id} className="border-b border-slate-50 hover:bg-slate-50 transition-colors">
-                                                                <td className="p-4 text-sm font-medium text-indigo-600">{o.id}</td><td className="p-4 text-sm text-slate-800">{o.cliente}</td>
+                                                                <td className="p-4 text-sm font-medium text-indigo-600">
+                                                                    {o.id} <br/> {o.empresa && <span className="text-xs text-indigo-400">{o.empresa}</span>}
+                                                                </td>
+                                                                <td className="p-4 text-sm text-slate-800">{o.cliente}</td>
                                                                 <td className={`p-4 text-sm text-right ${showFinances ? 'text-slate-600' : 'blur-sm select-none'}`}>${o.costoTotal.toFixed(2)}</td>
                                                                 <td className={`p-4 text-sm text-right ${showFinances ? 'text-emerald-600' : 'blur-sm select-none'}`}>${o.adelanto.toFixed(2)}</td>
                                                                 <td className={`p-4 text-sm text-right font-bold ${showFinances ? (pendiente > 0 ? 'text-orange-600' : 'text-slate-400') : 'blur-sm select-none'}`}>${pendiente.toFixed(2)}</td>
@@ -590,7 +740,7 @@
                                 </div>
                             )}
 
-                            {/* FORMULARIO */}
+                            {/* FORMULARIO DE ÓRDENES */}
                             {view === 'form' && (
                                 <div className="bg-white rounded-xl shadow-lg border border-slate-100 overflow-hidden max-w-4xl mx-auto">
                                     <div className="bg-slate-50 px-6 py-4 border-b border-slate-100 flex items-center justify-between">
@@ -599,40 +749,61 @@
                                             <h2 className="text-xl font-bold text-slate-700">{editingId ? 'Editar Orden' : 'Nueva Orden'}</h2>
                                         </div>
                                         {editingId && (
-                                            <select name="estado" value={formData.estado} onChange={handleChange} className="bg-white border border-slate-200 rounded-md py-1 px-3 text-sm font-bold text-slate-700 focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                                            <select name="estado" value={formData.estado} onChange={handleChangeOrder} className="bg-white border border-slate-200 rounded-md py-1 px-3 text-sm font-bold text-slate-700 focus:outline-none focus:ring-2 focus:ring-indigo-500">
                                                 <option value="Pendiente">🟡 Pendiente</option><option value="Completado">🟢 Completado</option><option value="Cancelado">🔴 Cancelado</option>
                                             </select>
                                         )}
                                     </div>
 
-                                    <form onSubmit={handleSave} className="p-6">
+                                    <form onSubmit={handleSaveOrder} className="p-6">
                                         <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
                                             {/* Izquierda */}
                                             <div className="space-y-6">
                                                 <div className="space-y-4">
-                                                    <h3 className="text-sm font-bold text-indigo-500 uppercase tracking-wider flex items-center gap-2"><i className="fa-solid fa-user"></i> Cliente</h3>
-                                                    <div className="grid grid-cols-2 gap-4">
-                                                        <div className="col-span-2 sm:col-span-1">
-                                                            <label className="block text-xs font-medium text-slate-500 mb-1">Nombre *</label>
-                                                            <input type="text" name="cliente" required list="clientes-existentes" className="w-full p-2.5 rounded-lg border border-slate-200 focus:ring-2 focus:ring-indigo-500" value={formData.cliente} onChange={handleChange} placeholder="Buscar o crear..." autoComplete="off" />
-                                                            <datalist id="clientes-existentes">{Array.from(new Set(orders.map(o => o.cliente))).map(c => <option key={c} value={c} />)}</datalist>
+                                                    <h3 className="text-sm font-bold text-indigo-500 uppercase tracking-wider flex items-center gap-2"><i className="fa-solid fa-user"></i> Datos del Cliente</h3>
+                                                    
+                                                    {clientsList.length === 0 ? (
+                                                        <div className="bg-orange-50 text-orange-800 p-3 rounded-lg text-sm border border-orange-200 flex flex-col items-center">
+                                                            <p className="mb-2 text-center">Para crear una orden, primero debes registrar un cliente.</p>
+                                                            <button type="button" onClick={handleNewClient} className="bg-orange-500 text-white px-4 py-1.5 rounded-md hover:bg-orange-600 transition-colors text-xs font-bold">Ir a Nuevo Cliente</button>
                                                         </div>
-                                                        <div className="col-span-2 sm:col-span-1">
-                                                            <label className="block text-xs font-medium text-slate-500 mb-1">Teléfono</label>
-                                                            <input type="tel" name="telefono" className="w-full p-2.5 rounded-lg border border-slate-200 focus:ring-2 focus:ring-indigo-500" value={formData.telefono} onChange={handleChange} />
-                                                        </div>
-                                                    </div>
+                                                    ) : (
+                                                        <>
+                                                            <div>
+                                                                <label className="block text-xs font-medium text-slate-500 mb-1">Seleccionar Cliente *</label>
+                                                                <select name="cliente" required value={formData.cliente} onChange={handleChangeOrder} className="w-full p-2.5 rounded-lg border border-slate-200 focus:ring-2 focus:ring-indigo-500 bg-white">
+                                                                    <option value="">Selecciona un cliente de tu lista...</option>
+                                                                    {clientsList.map(c => <option key={c.id} value={c.nombre}>{c.nombre}</option>)}
+                                                                </select>
+                                                            </div>
+
+                                                            {clientCompanies.length > 0 && (
+                                                                <div className="bg-indigo-50 p-3 rounded-lg border border-indigo-100 animate-in fade-in zoom-in duration-200">
+                                                                    <label className="block text-xs font-bold text-indigo-700 mb-1"><i className="fa-solid fa-building"></i> Empresa (Opcional)</label>
+                                                                    <select name="empresa" value={formData.empresa} onChange={handleChangeOrder} className="w-full p-2 rounded-md border border-indigo-200 focus:ring-2 focus:ring-indigo-500 bg-white text-sm">
+                                                                        <option value="">Ninguna empresa en específico</option>
+                                                                        {clientCompanies.map((emp, i) => <option key={i} value={emp}>{emp}</option>)}
+                                                                    </select>
+                                                                </div>
+                                                            )}
+                                                            
+                                                            <div>
+                                                                <label className="block text-xs font-medium text-slate-500 mb-1">Teléfono</label>
+                                                                <input type="tel" name="telefono" className="w-full p-2.5 rounded-lg border border-slate-200 bg-slate-50" value={formData.telefono} readOnly placeholder="Autocompletado al seleccionar cliente..." />
+                                                            </div>
+                                                        </>
+                                                    )}
                                                 </div>
 
                                                 <div className="space-y-4 pt-4 border-t border-slate-100">
                                                     <h3 className="text-sm font-bold text-indigo-500 uppercase tracking-wider flex items-center gap-2"><i className="fa-solid fa-file-lines"></i> Servicio</h3>
                                                     <div>
                                                         <label className="block text-xs font-medium text-slate-500 mb-1">Diseño Principal *</label>
-                                                        <textarea name="servicio" required rows="2" className="w-full p-2.5 rounded-lg border border-slate-200 focus:ring-2 focus:ring-indigo-500" value={formData.servicio} onChange={handleChange}></textarea>
+                                                        <textarea name="servicio" required rows="2" className="w-full p-2.5 rounded-lg border border-slate-200 focus:ring-2 focus:ring-indigo-500" value={formData.servicio} onChange={handleChangeOrder}></textarea>
                                                     </div>
                                                     <div>
                                                         <label className="block text-xs font-medium text-slate-500 mb-1">Extras / Detalles</label>
-                                                        <textarea name="extras" rows="2" className="w-full p-2.5 rounded-lg border border-slate-200 focus:ring-2 focus:ring-indigo-500" value={formData.extras} onChange={handleChange}></textarea>
+                                                        <textarea name="extras" rows="2" className="w-full p-2.5 rounded-lg border border-slate-200 focus:ring-2 focus:ring-indigo-500" value={formData.extras} onChange={handleChangeOrder}></textarea>
                                                     </div>
                                                 </div>
                                             </div>
@@ -643,7 +814,7 @@
                                                     <h3 className="text-sm font-bold text-indigo-500 uppercase tracking-wider flex items-center gap-2"><i className="fa-solid fa-dollar-sign"></i> Finanzas</h3>
                                                     <div>
                                                         <label className="block text-xs font-medium text-slate-500 mb-1">Costo Total del Proyecto *</label>
-                                                        <input type="number" name="costoTotal" required min="0" step="0.01" className="w-full p-2.5 rounded-lg border border-slate-200 focus:ring-2 focus:ring-indigo-500 font-bold text-slate-700" value={formData.costoTotal} onChange={handleChange} />
+                                                        <input type="number" name="costoTotal" required min="0" step="0.01" className="w-full p-2.5 rounded-lg border border-slate-200 focus:ring-2 focus:ring-indigo-500 font-bold text-slate-700" value={formData.costoTotal} onChange={handleChangeOrder} />
                                                     </div>
 
                                                     <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 space-y-3 mt-4">
@@ -703,7 +874,7 @@
 
                                         <div className="pt-6 mt-8 border-t border-slate-100 flex justify-end gap-3">
                                             <button type="button" onClick={() => goTo('orders')} className="px-6 py-2.5 rounded-lg border border-slate-200 text-slate-600 font-medium hover:bg-slate-50">Cancelar</button>
-                                            <button type="submit" className="px-6 py-2.5 rounded-lg bg-indigo-600 text-white font-medium hover:bg-indigo-700 flex items-center gap-2"><i className="fa-solid fa-floppy-disk text-lg"></i> Guardar</button>
+                                            <button type="submit" disabled={clientsList.length === 0} className={`px-6 py-2.5 rounded-lg text-white font-medium flex items-center gap-2 ${clientsList.length === 0 ? 'bg-slate-400 cursor-not-allowed' : 'bg-indigo-600 hover:bg-indigo-700'}`}><i className="fa-solid fa-floppy-disk text-lg"></i> Guardar Orden</button>
                                         </div>
                                     </form>
                                 </div>
