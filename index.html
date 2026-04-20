@@ -59,6 +59,7 @@
             // Estados Principales
             const [orders, setOrders] = useState([]);
             const [clientsList, setClientsList] = useState([]);
+            const [activitiesList, setActivitiesList] = useState([]); // Nuevo estado para las actividades del calendario
             const [user, setUser] = useState(null);
             const [authChecking, setAuthChecking] = useState(true);
             const [loadingData, setLoadingData] = useState(false);
@@ -70,6 +71,7 @@
             const [authError, setAuthError] = useState('');
 
             const [modal, setModal] = useState({ isOpen: false, type: '', message: '', data: null, actionType: '' });
+            const [activityModal, setActivityModal] = useState({ isOpen: false, date: '', desc: '', horas: '', ordenId: '' });
 
             const [view, setView] = useState('dashboard');
             const [searchTerm, setSearchTerm] = useState('');
@@ -82,7 +84,7 @@
             const [dashboardClientFilter, setDashboardClientFilter] = useState('Todos');
             const [ordersClientFilter, setOrdersClientFilter] = useState('Todos');
             const [dashboardServiceFilter, setDashboardServiceFilter] = useState('Todos');
-            const [financeToPrint, setFinanceToPrint] = useState(null);
+            const [financeToPrint, setFinanceToPrint] = useState(null); // 'all' o 'pending'
 
             // Nuevos Estados para Calendario, Ingresos y Botón Guardar
             const [isSaving, setIsSaving] = useState(false);
@@ -127,15 +129,22 @@
                     const fetchedClients = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
                     fetchedClients.sort((a, b) => a.nombre.localeCompare(b.nombre));
                     setClientsList(fetchedClients);
+                }, (error) => console.error(error));
+
+                const activitiesRef = db.collection('artifacts').doc(appId).collection('users').doc(user.uid).collection('activities');
+                const unsubscribeActivities = activitiesRef.onSnapshot((snapshot) => {
+                    const fetchedActivities = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                    setActivitiesList(fetchedActivities);
                     setLoadingData(false);
                 }, (error) => {
-                    console.error("Error al obtener clientes:", error);
+                    console.error("Error al obtener actividades:", error);
                     setLoadingData(false);
                 });
 
                 return () => {
                     unsubscribeOrders();
                     unsubscribeClients();
+                    unsubscribeActivities();
                 };
             }, [user]);
 
@@ -273,16 +282,46 @@
                 } catch (error) { setModal({ isOpen: true, type: 'alert', message: 'Error al guardar.' }); }
             };
 
+            // --- Manejadores de ACTIVIDADES (Calendario) ---
+            const openActivityModal = (dateStr) => {
+                setActivityModal({ isOpen: true, date: dateStr, desc: '', horas: '', ordenId: '' });
+            };
+
+            const handleSaveActivity = async () => {
+                if (!activityModal.desc) return;
+                try {
+                    const newId = `ACT-${Math.floor(Math.random() * 100000)}`;
+                    await db.collection('artifacts').doc(appId).collection('users').doc(user.uid).collection('activities').doc(newId).set({
+                        id: newId,
+                        fecha: activityModal.date,
+                        descripcion: activityModal.desc,
+                        horas: parseFloat(activityModal.horas) || 0,
+                        ordenId: activityModal.ordenId
+                    });
+                    setActivityModal({ ...activityModal, isOpen: false });
+                } catch(error) {
+                    console.error("Error al guardar actividad:", error);
+                }
+            };
+
             // --- ELIMINAR ---
-            const requestDelete = (type, id) => {
-                const message = type === 'order' ? '¿Deseas eliminar esta orden?' : '¿Deseas eliminar a este cliente?';
+            const requestDelete = (e, type, id) => {
+                e.stopPropagation();
+                let message = '¿Estás seguro de continuar?';
+                if (type === 'order') message = '¿Deseas eliminar esta orden?';
+                if (type === 'client') message = '¿Deseas eliminar a este cliente?';
+                if (type === 'activity') message = '¿Deseas eliminar esta actividad del calendario?';
+
                 setModal({ isOpen: true, type: 'confirm', message, data: id, actionType: type });
             };
 
             const confirmModalAction = async () => {
                 if (modal.type === 'confirm' && modal.data && user) {
                     try {
-                        const collectionName = modal.actionType === 'order' ? 'orders' : 'clients';
+                        let collectionName = 'orders';
+                        if (modal.actionType === 'client') collectionName = 'clients';
+                        if (modal.actionType === 'activity') collectionName = 'activities';
+
                         await db.collection('artifacts').doc(appId).collection('users').doc(user.uid).collection(collectionName).doc(modal.data).delete();
                     } catch (error) {}
                 }
@@ -290,7 +329,7 @@
             };
 
             const handlePrint = (client) => setClientToPrint(client); 
-            const handlePrintFinance = () => setFinanceToPrint(true);
+            const handlePrintFinance = (type) => setFinanceToPrint(type); // 'all' o 'pending'
 
             // Efecto robusto para impresión
             useEffect(() => {
@@ -389,9 +428,11 @@
             
             const calendarDays = Array.from({ length: daysInMonth }, (_, i) => {
                 const day = i + 1;
+                // Formato YYYY-MM-DD resistente a zonas horarias
                 const dateStr = `${calendarDate.getFullYear()}-${String(calendarDate.getMonth() + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
                 const dayOrders = orders.filter(o => o.estado === 'Pendiente' && o.fechaSolicitud === dateStr);
-                return { day, dateStr, dayOrders };
+                const dayActivities = activitiesList.filter(a => a.fecha === dateStr);
+                return { day, dateStr, dayOrders, dayActivities };
             });
 
             // PANTALLA DE CARGA INICIAL
@@ -442,7 +483,7 @@
             return (
                 <div className="min-h-screen">
                     
-                    {/* Modal */}
+                    {/* Modal Confirmación / Alertas */}
                     {modal.isOpen && (
                         <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-[100] flex items-center justify-center p-4">
                             <div className="bg-white rounded-xl shadow-xl max-w-md w-full p-6">
@@ -459,7 +500,45 @@
                         </div>
                     )}
 
-                    {/* Vista PDF */}
+                    {/* Modal Actividad Calendario */}
+                    {activityModal.isOpen && (
+                        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-[100] flex items-center justify-center p-4">
+                            <div className="bg-white rounded-xl shadow-xl max-w-md w-full p-6">
+                                <h3 className="text-lg font-bold text-slate-800 mb-4 flex items-center gap-2">
+                                    <i className="fa-solid fa-clock-rotate-left text-emerald-500"></i> Registrar Actividad
+                                </h3>
+                                <div className="space-y-4">
+                                    <div>
+                                        <label className="block text-xs font-bold text-slate-500 mb-1">Fecha</label>
+                                        <input type="text" readOnly value={activityModal.date} className="w-full border border-slate-200 bg-slate-50 p-2 rounded-lg text-sm font-medium" />
+                                    </div>
+                                    <div>
+                                        <label className="block text-xs font-bold text-slate-500 mb-1">Descripción de la tarea *</label>
+                                        <input type="text" value={activityModal.desc} onChange={(e) => setActivityModal({...activityModal, desc: e.target.value})} className="w-full border border-slate-200 focus:ring-2 focus:ring-emerald-500 outline-none p-2 rounded-lg text-sm" placeholder="Ej: Visita al cliente, diseño preliminar..." />
+                                    </div>
+                                    <div>
+                                        <label className="block text-xs font-bold text-slate-500 mb-1">Horas Invertidas</label>
+                                        <input type="number" step="0.5" min="0" value={activityModal.horas} onChange={(e) => setActivityModal({...activityModal, horas: e.target.value})} className="w-full border border-slate-200 focus:ring-2 focus:ring-emerald-500 outline-none p-2 rounded-lg text-sm" placeholder="Ej: 2.5" />
+                                    </div>
+                                    <div>
+                                        <label className="block text-xs font-bold text-slate-500 mb-1">Vincular a Proyecto (Opcional)</label>
+                                        <select value={activityModal.ordenId} onChange={(e) => setActivityModal({...activityModal, ordenId: e.target.value})} className="w-full border border-slate-200 focus:ring-2 focus:ring-emerald-500 outline-none p-2 rounded-lg text-sm bg-white">
+                                            <option value="">-- Sin vincular --</option>
+                                            {orders.filter(o => o.estado === 'Pendiente').map(o => (
+                                                <option key={o.id} value={o.id}>{o.cliente} - {o.servicio.substring(0,20)}...</option>
+                                            ))}
+                                        </select>
+                                    </div>
+                                </div>
+                                <div className="flex justify-end gap-3 mt-6 pt-4 border-t border-slate-100">
+                                    <button onClick={() => setActivityModal({...activityModal, isOpen: false})} className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-sm font-bold transition-colors">Cancelar</button>
+                                    <button onClick={handleSaveActivity} disabled={!activityModal.desc} className={`px-4 py-2 text-white rounded-lg text-sm font-bold transition-colors ${!activityModal.desc ? 'bg-slate-300 cursor-not-allowed' : 'bg-emerald-600 hover:bg-emerald-700'}`}>Guardar Actividad</button>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Vista PDF de Clientes */}
                     {clientToPrint && (
                         <div className="hidden print:block absolute top-0 left-0 w-full bg-white p-8 z-50">
                             <div className="border-b-2 border-indigo-600 pb-6 mb-6 flex justify-between items-end">
@@ -497,7 +576,12 @@
                     {financeToPrint && (
                         <div className="hidden print:block absolute top-0 left-0 w-full bg-white p-8 z-50">
                             <div className="border-b-2 border-indigo-600 pb-6 mb-6 flex justify-between items-end">
-                                <div><h1 className="text-3xl font-bold text-slate-800">Reporte Financiero</h1><p className="text-slate-500 mt-1">DesignManager Pro</p></div>
+                                <div>
+                                    <h1 className="text-3xl font-bold text-slate-800">
+                                        {financeToPrint === 'pending' ? 'Reporte de Saldos Pendientes' : 'Reporte Financiero Total'}
+                                    </h1>
+                                    <p className="text-slate-500 mt-1">DesignManager Pro</p>
+                                </div>
                                 <div className="text-right">
                                     <p className="font-bold text-slate-800">Filtro: {financeClientFilter}</p>
                                     <p className="text-slate-500">Fecha: {new Date().toLocaleDateString()}</p>
@@ -510,7 +594,7 @@
                                     </tr>
                                 </thead>
                                 <tbody>
-                                    {orders.filter(isFinanceMatch).map(o => {
+                                    {orders.filter(isFinanceMatch).filter(o => financeToPrint === 'pending' ? (o.costoTotal - o.adelanto) > 0 : true).map(o => {
                                         const pendiente = o.costoTotal - o.adelanto;
                                         return (
                                             <tr key={o.id} className="border-b">
@@ -526,9 +610,9 @@
                                 <tfoot>
                                     <tr className="bg-slate-50">
                                         <td colSpan="2" className="p-3 text-right font-bold text-slate-700">TOTALES:</td>
-                                        <td className="p-3 text-right font-bold text-slate-800">S/ {orders.filter(o => o.estado !== 'Cancelado').filter(isFinanceMatch).reduce((sum, o) => sum + o.costoTotal, 0).toFixed(2)}</td>
-                                        <td className="p-3 text-right font-bold text-emerald-600">S/ {orders.filter(isFinanceMatch).reduce((sum, o) => sum + o.adelanto, 0).toFixed(2)}</td>
-                                        <td className="p-3 text-right font-bold text-xl text-orange-600">S/ {orders.filter(o => o.estado === 'Pendiente').filter(isFinanceMatch).reduce((sum, o) => sum + (o.costoTotal - o.adelanto), 0).toFixed(2)}</td>
+                                        <td className="p-3 text-right font-bold text-slate-800">S/ {orders.filter(o => o.estado !== 'Cancelado').filter(isFinanceMatch).filter(o => financeToPrint === 'pending' ? (o.costoTotal - o.adelanto) > 0 : true).reduce((sum, o) => sum + o.costoTotal, 0).toFixed(2)}</td>
+                                        <td className="p-3 text-right font-bold text-emerald-600">S/ {orders.filter(isFinanceMatch).filter(o => financeToPrint === 'pending' ? (o.costoTotal - o.adelanto) > 0 : true).reduce((sum, o) => sum + o.adelanto, 0).toFixed(2)}</td>
+                                        <td className="p-3 text-right font-bold text-xl text-orange-600">S/ {orders.filter(o => o.estado === 'Pendiente').filter(isFinanceMatch).filter(o => financeToPrint === 'pending' ? (o.costoTotal - o.adelanto) > 0 : true).reduce((sum, o) => sum + (o.costoTotal - o.adelanto), 0).toFixed(2)}</td>
                                     </tr>
                                 </tfoot>
                             </table>
@@ -667,7 +751,7 @@
                                                 <div key={order.id} className={`bg-white rounded-xl shadow-sm border-l-4 p-5 relative group ${order.estado === 'Pendiente' ? 'border-l-orange-400' : order.estado === 'Completado' ? 'border-l-emerald-400' : 'border-l-red-400'} border-t border-r border-b border-slate-100`}>
                                                     <div className="absolute top-4 right-4 flex gap-2">
                                                         <button onClick={() => handleEditOrder(order)} className="p-1.5 bg-slate-50 text-slate-600 rounded-md hover:bg-indigo-50 hover:text-indigo-600"><i className="fa-solid fa-pen"></i></button>
-                                                        <button onClick={() => requestDelete('order', order.id)} className="p-1.5 bg-slate-50 text-slate-600 rounded-md hover:bg-red-50 hover:text-red-600"><i className="fa-solid fa-trash"></i></button>
+                                                        <button onClick={(e) => requestDelete(e, 'order', order.id)} className="p-1.5 bg-slate-50 text-slate-600 rounded-md hover:bg-red-50 hover:text-red-600"><i className="fa-solid fa-trash"></i></button>
                                                     </div>
                                                     <div className="mb-3">
                                                         <span className="text-xs font-bold text-slate-400">{order.id}</span>
@@ -712,7 +796,7 @@
                                             <div key={client.id} className="bg-white rounded-xl shadow-sm border border-slate-100 p-5 hover:border-indigo-200 transition-colors relative group">
                                                 <div className="absolute top-4 right-4 flex gap-2">
                                                     <button onClick={() => handleEditClient(client)} className="p-1.5 bg-slate-50 text-slate-600 rounded-md hover:bg-indigo-50 hover:text-indigo-600"><i className="fa-solid fa-pen"></i></button>
-                                                    <button onClick={() => requestDelete('client', client.id)} className="p-1.5 bg-slate-50 text-slate-600 rounded-md hover:bg-red-50 hover:text-red-600"><i className="fa-solid fa-trash"></i></button>
+                                                    <button onClick={(e) => requestDelete(e, 'client', client.id)} className="p-1.5 bg-slate-50 text-slate-600 rounded-md hover:bg-red-50 hover:text-red-600"><i className="fa-solid fa-trash"></i></button>
                                                 </div>
                                                 <div className="flex items-start justify-between mb-4 pr-16">
                                                     <div>
@@ -796,11 +880,14 @@
                                                     {financeFilterOptions.map(c => <option key={c} value={c}>{c}</option>)}
                                                 </select>
                                             </div>
-                                            <button onClick={() => setShowFinances(!showFinances)} className="bg-slate-100 hover:bg-slate-200 text-slate-600 px-4 py-2 rounded-lg flex items-center gap-2 transition-colors border border-slate-200">
-                                                {showFinances ? <><i className="fa-solid fa-eye-slash text-lg"></i> <span className="hidden sm:inline">Ocultar</span></> : <><i className="fa-solid fa-eye text-lg"></i> <span className="hidden sm:inline">Mostrar</span></>}
+                                            <button onClick={() => setShowFinances(!showFinances)} className="bg-slate-100 hover:bg-slate-200 text-slate-600 px-4 py-2 rounded-lg flex items-center gap-2 transition-colors border border-slate-200" title="Mostrar/Ocultar importes">
+                                                {showFinances ? <i className="fa-solid fa-eye-slash text-lg"></i> : <i className="fa-solid fa-eye text-lg"></i>}
                                             </button>
-                                            <button onClick={handlePrintFinance} className="bg-slate-800 hover:bg-slate-700 text-white px-4 py-2 rounded-lg flex items-center gap-2 transition-colors shadow-sm">
-                                                <i className="fa-solid fa-file-pdf"></i> <span className="hidden sm:inline">PDF</span>
+                                            <button onClick={() => handlePrintFinance('all')} className="bg-slate-800 hover:bg-slate-700 text-white px-4 py-2 rounded-lg flex items-center gap-2 transition-colors shadow-sm text-sm font-medium">
+                                                <i className="fa-solid fa-file-pdf"></i> <span className="hidden sm:inline">PDF Total</span>
+                                            </button>
+                                            <button onClick={() => handlePrintFinance('pending')} className="bg-orange-600 hover:bg-orange-700 text-white px-4 py-2 rounded-lg flex items-center gap-2 transition-colors shadow-sm text-sm font-medium">
+                                                <i className="fa-solid fa-file-pdf"></i> <span className="hidden sm:inline">PDF Deudas</span>
                                             </button>
                                         </div>
                                     </div>
@@ -1016,15 +1103,26 @@
                                         </div>
                                         <div className="grid grid-cols-7 gap-2">
                                             {Array.from({ length: firstDayOfMonth }).map((_, i) => (
-                                                <div key={`empty-${i}`} className="h-24 bg-slate-50 rounded-lg border border-dashed border-slate-200 opacity-50"></div>
+                                                <div key={`empty-${i}`} className="h-32 bg-slate-50 rounded-lg border border-dashed border-slate-200 opacity-50"></div>
                                             ))}
-                                            {calendarDays.map(({ day, dateStr, dayOrders }) => (
-                                                <div key={day} className="h-28 overflow-y-auto bg-white rounded-lg border border-slate-200 p-2 relative group hover:border-indigo-300 transition-colors">
-                                                    <span className={`text-xs font-bold rounded-full w-6 h-6 flex items-center justify-center mb-1 ${dateStr === new Date().toISOString().split('T')[0] ? 'bg-indigo-600 text-white' : 'text-slate-500'}`}>{day}</span>
+                                            {calendarDays.map(({ day, dateStr, dayOrders, dayActivities }) => (
+                                                <div key={day} onClick={() => openActivityModal(dateStr)} className="h-32 overflow-y-auto bg-white rounded-lg border border-slate-200 p-2 relative group hover:border-emerald-300 hover:shadow-md cursor-pointer transition-all">
+                                                    <div className="flex justify-between items-start mb-1">
+                                                        <span className={`text-xs font-bold rounded-full w-6 h-6 flex items-center justify-center ${dateStr === new Date().toISOString().split('T')[0] ? 'bg-indigo-600 text-white' : 'text-slate-500'}`}>{day}</span>
+                                                        <i className="fa-solid fa-plus text-emerald-400 opacity-0 group-hover:opacity-100 transition-opacity text-xs"></i>
+                                                    </div>
                                                     <div className="space-y-1">
+                                                        {/* Renderizamos las actividades personalizadas (Verdes) */}
+                                                        {dayActivities.map(a => (
+                                                            <div key={a.id} onClick={(e) => requestDelete(e, 'activity', a.id)} className="bg-emerald-50 border border-emerald-200 text-emerald-800 text-[10px] leading-tight p-1.5 rounded font-medium truncate hover:bg-red-100 hover:text-red-800 hover:border-red-300 transition-colors" title={`Actividad: ${a.descripcion}`}>
+                                                                <span className="font-bold mr-1">{a.horas ? `${a.horas}h` : ''}</span>
+                                                                {a.descripcion}
+                                                            </div>
+                                                        ))}
+                                                        {/* Renderizamos las órdenes creadas en este día (Azules) */}
                                                         {dayOrders.map(o => (
-                                                            <div key={o.id} onClick={() => handleEditOrder(o)} className="cursor-pointer bg-orange-100 border border-orange-200 text-orange-800 text-[10px] leading-tight p-1 rounded font-medium truncate hover:bg-orange-200" title={`${o.cliente}: ${o.servicio}`}>
-                                                                {o.cliente}
+                                                            <div key={o.id} onClick={(e) => { e.stopPropagation(); handleEditOrder(o); }} className="bg-indigo-50 border border-indigo-200 text-indigo-800 text-[10px] leading-tight p-1.5 rounded font-medium truncate hover:bg-indigo-100 transition-colors" title={`Orden de ${o.cliente}: ${o.servicio}`}>
+                                                                <i className="fa-solid fa-box mr-1 opacity-70"></i>{o.cliente}
                                                             </div>
                                                         ))}
                                                     </div>
