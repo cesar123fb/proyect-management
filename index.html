@@ -22,6 +22,13 @@
     
     <!-- Babel para compilar React en el navegador -->
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <style>
+        @media print {
+            body { background-color: white !important; }
+            .print\:hidden { display: none !important; }
+            .print\:block { display: block !important; }
+        }
+    </style>
 </head>
 <body class="bg-slate-50 text-slate-800 font-sans">
     
@@ -76,6 +83,11 @@
             const [ordersClientFilter, setOrdersClientFilter] = useState('Todos');
             const [dashboardServiceFilter, setDashboardServiceFilter] = useState('Todos');
             const [financeToPrint, setFinanceToPrint] = useState(null);
+
+            // Nuevos Estados para Calendario, Ingresos y Botón Guardar
+            const [isSaving, setIsSaving] = useState(false);
+            const [calendarDate, setCalendarDate] = useState(new Date());
+            const [incomeMonth, setIncomeMonth] = useState(new Date().toISOString().slice(0, 7));
 
             // Formularios
             const [formData, setFormData] = useState({
@@ -138,11 +150,13 @@
                         await auth.signInWithEmailAndPassword(authEmail, authPassword);
                     }
                 } catch (error) {
+                    console.error("Error de autenticación:", error);
                     if (error.code === 'auth/email-already-in-use') setAuthError('Este correo ya está registrado.');
                     else if (error.code === 'auth/wrong-password' || error.code === 'auth/invalid-credential') setAuthError('Correo o contraseña incorrectos.');
                     else if (error.code === 'auth/user-not-found') setAuthError('Usuario no encontrado.');
                     else if (error.code === 'auth/weak-password') setAuthError('La contraseña debe tener al menos 6 caracteres.');
-                    else setAuthError('Ocurrió un error. Intenta de nuevo.');
+                    else if (error.code === 'auth/operation-not-allowed') setAuthError('Error: Aún no has activado el registro en Firebase. Ve a Authentication > Sign-in method y habilita Correo/Contraseña.');
+                    else setAuthError('Ocurrió un error: ' + error.message);
                 }
             };
 
@@ -198,10 +212,14 @@
 
             const handleSaveOrder = async (e) => {
                 e.preventDefault();
+                if (isSaving) return; // Evita clics dobles
+
                 if (!formData.cliente || !formData.servicio || !formData.costoTotal) {
                     setModal({ isOpen: true, type: 'alert', message: 'Por favor, llena los campos obligatorios.' }); 
                     return;
                 }
+
+                setIsSaving(true);
                 const totalAdelanto = (formData.depositos || []).reduce((sum, dep) => sum + (parseFloat(dep.monto) || 0), 0);
                 const orderData = { ...formData, costoTotal: parseFloat(formData.costoTotal) || 0, adelanto: totalAdelanto };
 
@@ -211,6 +229,8 @@
                     goTo('orders');
                 } catch (error) {
                     setModal({ isOpen: true, type: 'alert', message: 'Ocurrió un error al guardar.' });
+                } finally {
+                    setIsSaving(false);
                 }
             };
 
@@ -269,7 +289,20 @@
                 setModal({ isOpen: false, type: '', message: '', data: null, actionType: '' });
             };
 
-            const handlePrint = (client) => { setClientToPrint(client); setTimeout(() => { window.print(); setClientToPrint(null); }, 500); };
+            const handlePrint = (client) => setClientToPrint(client); 
+            const handlePrintFinance = () => setFinanceToPrint(true);
+
+            // Efecto robusto para impresión
+            useEffect(() => {
+                if (clientToPrint || financeToPrint) {
+                    const timer = setTimeout(() => {
+                        window.print();
+                        if (clientToPrint) setClientToPrint(null);
+                        if (financeToPrint) setFinanceToPrint(null);
+                    }, 800);
+                    return () => clearTimeout(timer);
+                }
+            }, [clientToPrint, financeToPrint]);
 
             // Depósitos e Imágenes
             const handleAddDeposito = () => setFormData(prev => ({...prev, depositos: [...(prev.depositos || []), { monto: '', fecha: new Date().toISOString().split('T')[0] }]}));
@@ -322,10 +355,44 @@
                 return o.cliente === financeClientFilter;
             };
 
-            const handlePrintFinance = () => {
-                setFinanceToPrint(true);
-                setTimeout(() => { window.print(); setFinanceToPrint(null); }, 500);
-            };
+            // Datos de Ingresos
+            const depositsData = useMemo(() => {
+                const allDeps = [];
+                let monthlyTotal = 0;
+                orders.forEach(o => {
+                    if (o.depositos) {
+                        o.depositos.forEach(dep => {
+                            const depDate = dep.fecha || '';
+                            const isCurrentMonth = depDate.startsWith(incomeMonth);
+                            if (isCurrentMonth) {
+                                monthlyTotal += parseFloat(dep.monto) || 0;
+                            }
+                            allDeps.push({
+                                ...dep,
+                                isCurrentMonth,
+                                ordenId: o.id,
+                                cliente: o.cliente,
+                                actividad: o.servicio // mapeo de Actividad
+                            });
+                        });
+                    }
+                });
+                allDeps.sort((a, b) => new Date(b.fecha) - new Date(a.fecha));
+                return { all: allDeps, monthlyTotal };
+            }, [orders, incomeMonth]);
+
+            // Datos de Calendario
+            const firstDayOfMonth = new Date(calendarDate.getFullYear(), calendarDate.getMonth(), 1).getDay();
+            const daysInMonth = new Date(calendarDate.getFullYear(), calendarDate.getMonth() + 1, 0).getDate();
+            const prevMonth = () => setCalendarDate(new Date(calendarDate.getFullYear(), calendarDate.getMonth() - 1, 1));
+            const nextMonth = () => setCalendarDate(new Date(calendarDate.getFullYear(), calendarDate.getMonth() + 1, 1));
+            
+            const calendarDays = Array.from({ length: daysInMonth }, (_, i) => {
+                const day = i + 1;
+                const dateStr = `${calendarDate.getFullYear()}-${String(calendarDate.getMonth() + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+                const dayOrders = orders.filter(o => o.estado === 'Pendiente' && o.fechaSolicitud === dateStr);
+                return { day, dateStr, dayOrders };
+            });
 
             // PANTALLA DE CARGA INICIAL
             if (authChecking) {
@@ -357,13 +424,13 @@
                                     <label className="block text-sm font-medium text-slate-700 mb-1">Contraseña</label>
                                     <input type="password" required value={authPassword} onChange={e=>setAuthPassword(e.target.value)} className="w-full p-3 border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:outline-none" placeholder="••••••••" />
                                 </div>
-                                {authError && <div className="bg-red-50 text-red-600 p-3 rounded-lg text-sm flex items-center gap-2"><i className="fa-solid fa-circle-exclamation"></i> {authError}</div>}
+                                {authError && <div className="bg-red-50 text-red-600 p-3 rounded-lg text-sm flex items-start gap-2 text-left leading-tight"><i className="fa-solid fa-circle-exclamation mt-0.5"></i> <span>{authError}</span></div>}
                                 <button type="submit" className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold p-3 rounded-lg transition-colors shadow-md">
                                     {isRegistering ? 'Crear Cuenta' : 'Ingresar al Sistema'}
                                 </button>
                             </form>
                             <div className="mt-6 text-center">
-                                <button onClick={()=>{setIsRegistering(!isRegistering); setAuthError('');}} className="text-sm text-indigo-600 hover:text-indigo-800 font-medium">
+                                <button type="button" onClick={()=>{setIsRegistering(!isRegistering); setAuthError('');}} className="text-sm text-indigo-600 hover:text-indigo-800 font-medium">
                                     {isRegistering ? '¿Ya tienes cuenta? Inicia sesión aquí' : '¿No tienes cuenta? Regístrate aquí'}
                                 </button>
                             </div>
@@ -403,7 +470,7 @@
                             <table className="w-full text-left border-collapse">
                                 <thead>
                                     <tr className="bg-slate-100 text-slate-700">
-                                        <th className="p-3 border-b">ID Orden / Empresa</th><th className="p-3 border-b">Servicio</th><th className="p-3 border-b text-right">Costo Total</th><th className="p-3 border-b text-right">Abonado</th><th className="p-3 border-b text-right font-bold">Pendiente</th>
+                                        <th className="p-3 border-b">ID Orden / Empresa</th><th className="p-3 border-b">Actividad</th><th className="p-3 border-b text-right">Costo Total</th><th className="p-3 border-b text-right">Abonado</th><th className="p-3 border-b text-right font-bold">Pendiente</th>
                                     </tr>
                                 </thead>
                                 <tbody>
@@ -439,7 +506,7 @@
                             <table className="w-full text-left border-collapse">
                                 <thead>
                                     <tr className="bg-slate-100 text-slate-700">
-                                        <th className="p-3 border-b">Cliente / Empresa</th><th className="p-3 border-b">Servicio</th><th className="p-3 border-b text-right">Facturado</th><th className="p-3 border-b text-right">Abonado</th><th className="p-3 border-b text-right font-bold">Pendiente</th>
+                                        <th className="p-3 border-b">Cliente / Empresa</th><th className="p-3 border-b">Actividad</th><th className="p-3 border-b text-right">Facturado</th><th className="p-3 border-b text-right">Abonado</th><th className="p-3 border-b text-right font-bold">Pendiente</th>
                                     </tr>
                                 </thead>
                                 <tbody>
@@ -481,6 +548,9 @@
                                         <button onClick={() => goTo('dashboard')} className={`px-4 py-2 rounded-md flex items-center gap-2 text-sm font-medium transition-colors ${view === 'dashboard' ? 'bg-white text-indigo-700 shadow' : 'text-indigo-100 hover:text-white hover:bg-indigo-600'}`}>
                                             <i className="fa-solid fa-table-cells-large"></i> <span className="hidden sm:inline">Índice</span>
                                         </button>
+                                        <button onClick={() => goTo('calendar')} className={`px-4 py-2 rounded-md flex items-center gap-2 text-sm font-medium transition-colors ${view === 'calendar' ? 'bg-white text-indigo-700 shadow' : 'text-indigo-100 hover:text-white hover:bg-indigo-600'}`}>
+                                            <i className="fa-solid fa-calendar-days"></i> <span className="hidden sm:inline">Calendario</span>
+                                        </button>
                                         <button onClick={() => goTo('orders')} className={`px-4 py-2 rounded-md flex items-center gap-2 text-sm font-medium transition-colors ${view === 'orders' || view === 'form' ? 'bg-white text-indigo-700 shadow' : 'text-indigo-100 hover:text-white hover:bg-indigo-600'}`}>
                                             <i className="fa-solid fa-file-lines"></i> <span className="hidden sm:inline">Órdenes</span>
                                         </button>
@@ -489,6 +559,9 @@
                                         </button>
                                         <button onClick={() => goTo('finances')} className={`px-4 py-2 rounded-md flex items-center gap-2 text-sm font-medium transition-colors ${view === 'finances' ? 'bg-white text-indigo-700 shadow' : 'text-indigo-100 hover:text-white hover:bg-indigo-600'}`}>
                                             <i className="fa-solid fa-chart-pie"></i> <span className="hidden sm:inline">Finanzas</span>
+                                        </button>
+                                        <button onClick={() => goTo('income')} className={`px-4 py-2 rounded-md flex items-center gap-2 text-sm font-medium transition-colors ${view === 'income' ? 'bg-white text-indigo-700 shadow' : 'text-indigo-100 hover:text-white hover:bg-indigo-600'}`}>
+                                            <i className="fa-solid fa-money-bill-wave"></i> <span className="hidden sm:inline">Ingresos</span>
                                         </button>
                                     </div>
                                     <button onClick={() => auth.signOut()} title="Cerrar Sesión" className="text-indigo-200 hover:text-white bg-indigo-800 p-2 rounded-lg transition-colors">
@@ -532,6 +605,8 @@
                                                         <option value="Reingeniería">Reingeniería</option>
                                                         <option value="Diseños">Diseños</option>
                                                         <option value="Visitas Técnicas">Visitas Técnicas</option>
+                                                        <option value="Delivery">Delivery</option>
+                                                        <option value="Calidad">Calidad</option>
                                                     </select>
                                                 </div>
                                             </div>
@@ -749,7 +824,7 @@
                                             <table className="w-full text-left border-collapse min-w-[600px]">
                                                 <thead>
                                                     <tr className="bg-white text-slate-500 text-sm border-b border-slate-100">
-                                                        <th className="p-4 font-medium">Cliente</th><th className="p-4 font-medium">Proyecto / Descripción</th><th className="p-4 font-medium text-right">Costo Total</th>
+                                                        <th className="p-4 font-medium">Cliente</th><th className="p-4 font-medium">Actividad</th><th className="p-4 font-medium text-right">Costo Total</th>
                                                         <th className="p-4 font-medium text-right">Abonado</th><th className="p-4 font-medium text-right">Pendiente</th><th className="p-4 font-medium text-center">Estado</th>
                                                     </tr>
                                                 </thead>
@@ -833,6 +908,8 @@
                                                                 <option value="Reingeniería">Reingeniería</option>
                                                                 <option value="Diseños">Diseños</option>
                                                                 <option value="Visitas Técnicas">Visitas Técnicas</option>
+                                                                <option value="Delivery">Delivery</option>
+                                                                <option value="Calidad">Calidad</option>
                                                             </select>
                                                         </div>
                                                         <div>
@@ -841,7 +918,7 @@
                                                         </div>
                                                     </div>
                                                     <div>
-                                                        <label className="block text-xs font-medium text-slate-500 mb-1">Diseño Principal / Proyecto *</label>
+                                                        <label className="block text-xs font-medium text-slate-500 mb-1">Actividad *</label>
                                                         <textarea name="servicio" required rows="2" className="w-full p-2.5 rounded-lg border border-slate-200 focus:ring-2 focus:ring-indigo-500" value={formData.servicio} onChange={handleChangeOrder}></textarea>
                                                     </div>
                                                     <div>
@@ -911,9 +988,103 @@
                                         </div>
                                         <div className="pt-6 mt-8 border-t border-slate-100 flex justify-end gap-3">
                                             <button type="button" onClick={() => goTo('orders')} className="px-6 py-2.5 rounded-lg border border-slate-200 text-slate-600 font-medium hover:bg-slate-50">Cancelar</button>
-                                            <button type="submit" disabled={clientsList.length === 0} className={`px-6 py-2.5 rounded-lg text-white font-medium flex items-center gap-2 ${clientsList.length === 0 ? 'bg-slate-400 cursor-not-allowed' : 'bg-indigo-600 hover:bg-indigo-700'}`}><i className="fa-solid fa-floppy-disk text-lg"></i> Guardar Orden</button>
+                                            <button type="submit" disabled={isSaving || clientsList.length === 0} className={`px-6 py-2.5 rounded-lg text-white font-medium flex items-center gap-2 ${(isSaving || clientsList.length === 0) ? 'bg-slate-400 cursor-not-allowed' : 'bg-indigo-600 hover:bg-indigo-700'}`}>
+                                                <i className={`fa-solid ${isSaving ? 'fa-spinner fa-spin' : 'fa-floppy-disk'} text-lg`}></i> {isSaving ? 'Guardando...' : 'Guardar Orden'}
+                                            </button>
                                         </div>
                                     </form>
+                                </div>
+                            )}
+
+                            {/* CALENDARIO */}
+                            {!loadingData && view === 'calendar' && (
+                                <div className="space-y-6">
+                                    <div className="flex flex-col sm:flex-row justify-between items-center gap-4 bg-white p-4 rounded-xl shadow-sm border border-slate-100">
+                                        <h2 className="text-xl font-bold text-slate-700 flex items-center gap-2"><i className="fa-solid fa-calendar-days text-indigo-500"></i> Calendario de Actividades</h2>
+                                        <div className="flex items-center gap-4">
+                                            <button onClick={prevMonth} className="p-2 bg-slate-100 text-slate-600 rounded-lg hover:bg-slate-200"><i className="fa-solid fa-chevron-left"></i></button>
+                                            <span className="font-bold text-slate-800 capitalize w-40 text-center">
+                                                {calendarDate.toLocaleDateString('es-ES', { month: 'long', year: 'numeric' })}
+                                            </span>
+                                            <button onClick={nextMonth} className="p-2 bg-slate-100 text-slate-600 rounded-lg hover:bg-slate-200"><i className="fa-solid fa-chevron-right"></i></button>
+                                        </div>
+                                    </div>
+
+                                    <div className="bg-white rounded-xl shadow-sm border border-slate-100 p-4">
+                                        <div className="grid grid-cols-7 gap-2 mb-2 text-center font-bold text-sm text-slate-500">
+                                            <div>Dom</div><div>Lun</div><div>Mar</div><div>Mié</div><div>Jue</div><div>Vie</div><div>Sáb</div>
+                                        </div>
+                                        <div className="grid grid-cols-7 gap-2">
+                                            {Array.from({ length: firstDayOfMonth }).map((_, i) => (
+                                                <div key={`empty-${i}`} className="h-24 bg-slate-50 rounded-lg border border-dashed border-slate-200 opacity-50"></div>
+                                            ))}
+                                            {calendarDays.map(({ day, dateStr, dayOrders }) => (
+                                                <div key={day} className="h-28 overflow-y-auto bg-white rounded-lg border border-slate-200 p-2 relative group hover:border-indigo-300 transition-colors">
+                                                    <span className={`text-xs font-bold rounded-full w-6 h-6 flex items-center justify-center mb-1 ${dateStr === new Date().toISOString().split('T')[0] ? 'bg-indigo-600 text-white' : 'text-slate-500'}`}>{day}</span>
+                                                    <div className="space-y-1">
+                                                        {dayOrders.map(o => (
+                                                            <div key={o.id} onClick={() => handleEditOrder(o)} className="cursor-pointer bg-orange-100 border border-orange-200 text-orange-800 text-[10px] leading-tight p-1 rounded font-medium truncate hover:bg-orange-200" title={`${o.cliente}: ${o.servicio}`}>
+                                                                {o.cliente}
+                                                            </div>
+                                                        ))}
+                                                    </div>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </div>
+                                </div>
+                            )}
+
+                            {/* INGRESOS MENSUALES */}
+                            {!loadingData && view === 'income' && (
+                                <div className="space-y-6">
+                                    <div className="flex flex-col sm:flex-row justify-between items-center gap-4 bg-white p-4 rounded-xl shadow-sm border border-slate-100">
+                                        <h2 className="text-xl font-bold text-slate-700 flex items-center gap-2"><i className="fa-solid fa-money-bill-wave text-emerald-500"></i> Control de Ingresos</h2>
+                                        <div className="flex items-center gap-2">
+                                            <label className="text-sm font-medium text-slate-500">Mes a consultar:</label>
+                                            <input type="month" value={incomeMonth} onChange={(e) => setIncomeMonth(e.target.value)} className="p-2 rounded-lg border border-slate-200 focus:ring-2 focus:ring-emerald-500 outline-none text-sm font-bold text-slate-700" />
+                                        </div>
+                                    </div>
+
+                                    <div className="bg-gradient-to-r from-emerald-500 to-teal-500 rounded-xl shadow-md p-8 text-white text-center">
+                                        <h3 className="text-emerald-100 font-medium mb-2 text-lg">Total Recibido este mes</h3>
+                                        <p className="text-5xl font-bold">S/ {depositsData.monthlyTotal.toFixed(2)}</p>
+                                    </div>
+
+                                    <div className="bg-white rounded-xl shadow-sm border border-slate-100 overflow-hidden">
+                                        <div className="p-4 bg-slate-50 border-b border-slate-100 flex justify-between items-center">
+                                            <h3 className="font-bold text-slate-700">Historial de Depósitos / Adelantos</h3>
+                                            <span className="bg-slate-200 text-slate-600 text-xs px-2 py-1 rounded-full font-bold">{depositsData.all.filter(d=>d.isCurrentMonth).length} registros en el mes</span>
+                                        </div>
+                                        <div className="overflow-x-auto">
+                                            <table className="w-full text-left border-collapse min-w-[600px]">
+                                                <thead>
+                                                    <tr className="bg-white text-slate-500 text-sm border-b border-slate-100">
+                                                        <th className="p-4 font-medium">Fecha</th>
+                                                        <th className="p-4 font-medium">Monto</th>
+                                                        <th className="p-4 font-medium">Cliente</th>
+                                                        <th className="p-4 font-medium">Actividad</th>
+                                                        <th className="p-4 font-medium">ID Orden</th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody>
+                                                    {depositsData.all.length === 0 ? (
+                                                        <tr><td colSpan="5" className="p-8 text-center text-slate-500 italic">No hay depósitos registrados.</td></tr>
+                                                    ) : (
+                                                        depositsData.all.map((dep, idx) => (
+                                                            <tr key={idx} className={`border-b border-slate-50 transition-colors ${dep.isCurrentMonth ? 'bg-emerald-50/50 hover:bg-emerald-50' : 'opacity-50 hover:opacity-100'}`}>
+                                                                <td className="p-4 text-sm text-slate-600"><i className="fa-solid fa-calendar-day text-slate-400 mr-2"></i>{dep.fecha}</td>
+                                                                <td className="p-4 text-sm font-bold text-emerald-600">S/ {parseFloat(dep.monto).toFixed(2)}</td>
+                                                                <td className="p-4 text-sm text-slate-800 font-medium">{dep.cliente}</td>
+                                                                <td className="p-4 text-sm text-slate-600 truncate max-w-[200px]">{dep.actividad}</td>
+                                                                <td className="p-4 text-xs font-mono text-slate-400">{dep.ordenId}</td>
+                                                            </tr>
+                                                        ))
+                                                    )}
+                                                </tbody>
+                                            </table>
+                                        </div>
+                                    </div>
                                 </div>
                             )}
                         </main>
@@ -926,5 +1097,4 @@
         root.render(<App />);
     </script>
 </body>
-</html>
 </html>
