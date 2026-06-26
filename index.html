@@ -5,21 +5,28 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>DesignManager Pro</title>
     
+    <!-- TailwindCSS para el diseño -->
     <script src="https://cdn.tailwindcss.com"></script>
     
+    <!-- FontAwesome para los íconos -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     
+    <!-- Firebase (Versión Compat para HTML simple) -->
     <script src="https://www.gstatic.com/firebasejs/10.8.1/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.8.1/firebase-auth-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.8.1/firebase-firestore-compat.js"></script>
     
+    <!-- React y ReactDOM -->
     <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
     
+    <!-- Babel para compilar React en el navegador -->
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 
+    <!-- Chart.js para gráficas interactivas -->
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     
+    <!-- CONFIGURACIÓN: Forzamos el modo clásico para evitar el error de jsx-runtime -->
     <script>
         Babel.registerPreset('react-classic', {
             presets: [
@@ -84,11 +91,11 @@
             const [editingId, setEditingId] = useState(null);
             const [clientToPrint, setClientToPrint] = useState(null);
             
+            // Filtros restaurados
             const [statusFilter, setStatusFilter] = useState('Todos');
+            const [ordersClientFilter, setOrdersClientFilter] = useState('Todos');
             const [showFinances, setShowFinances] = useState(true);
             const [financeClientFilter, setFinanceClientFilter] = useState('Todos');
-            const [dashboardClientFilter, setDashboardClientFilter] = useState('Todos');
-            const [ordersClientFilter, setOrdersClientFilter] = useState('Todos');
             const [dashboardServiceFilter, setDashboardServiceFilter] = useState('Todos');
             const [financeToPrint, setFinanceToPrint] = useState(null);
 
@@ -96,7 +103,7 @@
             const [calendarDate, setCalendarDate] = useState(new Date());
             const [incomeMonth, setIncomeMonth] = useState(new Date().toISOString().slice(0, 7));
 
-            // Formularios (Sin teléfono ni imágenes)
+            // Formularios
             const [formData, setFormData] = useState({
                 cliente: '', empresa: '', servicio: '', extras: '',
                 costoTotal: '', depositos: [], estado: 'Pendiente',
@@ -109,7 +116,7 @@
                 nombre: '', empresas: ['']
             });
 
-            // Control de Autenticación
+            // Control de Autenticación (Sistema de Login real)
             useEffect(() => {
                 const unsubscribe = auth.onAuthStateChanged((currentUser) => {
                     setUser(currentUser);
@@ -154,9 +161,9 @@
                 };
             }, [user]);
 
-            // Efecto para inicializar/actualizar la Gráfica Interactiva
+            // Efecto para la Gráfica
             useEffect(() => {
-                if (view === 'dashboard' && !loadingData) {
+                if (view === 'dashboard' && !loadingData && user) {
                     const ctx = document.getElementById('dashboardChart');
                     if (ctx) {
                         const existingChart = Chart.getChart(ctx);
@@ -182,17 +189,13 @@
                             options: {
                                 responsive: true,
                                 maintainAspectRatio: false,
-                                plugins: {
-                                    legend: { display: false }
-                                },
-                                scales: {
-                                    y: { beginAtZero: true, ticks: { stepSize: 1 } }
-                                }
+                                plugins: { legend: { display: false } },
+                                scales: { y: { beginAtZero: true, ticks: { stepSize: 1 } } }
                             }
                         });
                     }
                 }
-            }, [view, orders, loadingData]);
+            }, [view, orders, loadingData, user]);
 
             const handleAuth = async (e) => {
                 e.preventDefault();
@@ -387,6 +390,7 @@
             };
             const handleRemoveDeposito = (index) => setFormData(prev => ({ ...prev, depositos: (prev.depositos || []).filter((_, i) => i !== index) }));
 
+            // --- FILTROS RESTAURADOS ---
             const filteredOrders = orders.filter(o => 
                 (statusFilter === 'Todos' || o.estado === statusFilter) &&
                 (ordersClientFilter === 'Todos' || o.cliente === ordersClientFilter) &&
@@ -451,6 +455,61 @@
                 const dayActivities = activitiesList.filter(a => a.fecha === dateStr);
                 return { day, dateStr, dayOrders, dayActivities };
             });
+
+            // Pantalla de Carga
+            if (authChecking || loadingData) {
+                return (
+                    <div className="min-h-screen bg-slate-50 flex flex-col items-center justify-center text-indigo-600">
+                        <i className="fa-solid fa-circle-notch fa-spin text-4xl mb-4"></i>
+                        <p className="font-medium text-slate-600">Cargando DesignManager Pro...</p>
+                    </div>
+                );
+            }
+
+            // PANTALLA DE LOGIN
+            if (!user) {
+                return (
+                    <div className="min-h-screen bg-gradient-to-br from-indigo-50 to-slate-100 flex items-center justify-center p-4">
+                        <div className="bg-white rounded-2xl shadow-xl w-full max-w-md overflow-hidden">
+                            <div className="bg-indigo-600 p-8 text-center">
+                                <i className="fa-solid fa-briefcase text-white text-4xl mb-3"></i>
+                                <h1 className="text-2xl font-bold text-white">DesignManager Pro</h1>
+                                <p className="text-indigo-200 mt-2 text-sm">Gestiona tus órdenes y finanzas</p>
+                            </div>
+                            <div className="p-8">
+                                <h2 className="text-xl font-bold text-slate-800 mb-6 text-center">
+                                    {isRegistering ? 'Crear Nueva Cuenta' : 'Iniciar Sesión'}
+                                </h2>
+                                {authError && (
+                                    <div className="bg-red-50 text-red-600 p-3 rounded-lg text-sm mb-4 border border-red-100 flex items-start gap-2">
+                                        <i className="fa-solid fa-circle-exclamation mt-0.5"></i>
+                                        <span>{authError}</span>
+                                    </div>
+                                )}
+                                <form onSubmit={handleAuth} className="space-y-4">
+                                    <div>
+                                        <label className="block text-xs font-bold text-slate-500 mb-1 uppercase tracking-wide">Correo Electrónico</label>
+                                        <input type="email" required value={authEmail} onChange={(e) => setAuthEmail(e.target.value)} className="w-full px-4 py-3 rounded-lg border border-slate-200 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none transition-all" placeholder="tu@correo.com" />
+                                    </div>
+                                    <div>
+                                        <label className="block text-xs font-bold text-slate-500 mb-1 uppercase tracking-wide">Contraseña</label>
+                                        <input type="password" required value={authPassword} onChange={(e) => setAuthPassword(e.target.value)} className="w-full px-4 py-3 rounded-lg border border-slate-200 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none transition-all" placeholder="••••••••" />
+                                    </div>
+                                    <button type="submit" className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3 px-4 rounded-lg transition-colors shadow-md mt-2">
+                                        {isRegistering ? 'Registrarse' : 'Entrar al Sistema'}
+                                    </button>
+                                </form>
+                                <div className="mt-6 text-center text-sm text-slate-500 border-t border-slate-100 pt-6">
+                                    {isRegistering ? '¿Ya tienes una cuenta? ' : '¿No tienes cuenta? '}
+                                    <button type="button" onClick={() => { setIsRegistering(!isRegistering); setAuthError(''); }} className="text-indigo-600 font-bold hover:underline">
+                                        {isRegistering ? 'Inicia Sesión' : 'Regístrate aquí'}
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                );
+            }
 
             return (
                 <div className="min-h-screen">
@@ -691,9 +750,30 @@
                                 <div className="space-y-6">
                                     <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 bg-white p-4 rounded-xl shadow-sm border border-slate-100">
                                         <h2 className="text-xl font-bold text-slate-700">Listado de Órdenes</h2>
-                                        <button onClick={handleNewOrder} className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg flex items-center gap-2 transition-colors font-semibold text-sm shadow-sm"><i className="fa-solid fa-plus"></i> Nueva Orden</button>
+                                        
+                                        {/* FILTROS RESTAURADOS AQUÍ */}
+                                        <div className="flex flex-wrap sm:flex-nowrap gap-2 w-full sm:w-auto">
+                                            <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} className="p-2 rounded-lg border border-slate-200 text-sm font-medium text-slate-600 bg-slate-50">
+                                                <option value="Todos">Todos los estados</option>
+                                                <option value="Pendiente">🟡 Pendientes</option>
+                                                <option value="Completado">🟢 Completados</option>
+                                                <option value="Cancelado">🔴 Cancelados</option>
+                                            </select>
+                                            <select value={ordersClientFilter} onChange={(e) => setOrdersClientFilter(e.target.value)} className="p-2 rounded-lg border border-slate-200 text-sm font-medium text-slate-600 bg-slate-50">
+                                                <option value="Todos">Todos los clientes</option>
+                                                {clientsList.map(c => <option key={c.id} value={c.nombre}>{c.nombre}</option>)}
+                                            </select>
+                                            <div className="relative flex-1 sm:w-64">
+                                                <i className="fa-solid fa-magnifying-glass absolute left-3 top-3 text-slate-400 text-sm"></i>
+                                                <input type="text" placeholder="Buscar orden..." className="w-full pl-9 pr-4 py-2 rounded-lg border border-slate-200 text-sm" value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} />
+                                            </div>
+                                            <button onClick={handleNewOrder} className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg flex items-center gap-2 transition-colors font-semibold text-sm shadow-sm"><i className="fa-solid fa-plus"></i> Nueva</button>
+                                        </div>
                                     </div>
                                     <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
+                                        {filteredOrders.length === 0 && (
+                                           <p className="text-slate-500 col-span-full text-center py-8">No se encontraron órdenes que coincidan con los filtros.</p>
+                                        )}
                                         {filteredOrders.map((order, idx) => {
                                             const pendiente = order.costoTotal - order.adelanto;
                                             return (
@@ -702,14 +782,19 @@
                                                         <button onClick={() => handleEditOrder(order)} className="p-1.5 bg-slate-50 text-slate-600 rounded-md hover:bg-indigo-50 hover:text-indigo-600"><i className="fa-solid fa-pen text-xs"></i></button>
                                                         <button onClick={(e) => requestDelete(e, 'order', order.id)} className="p-1.5 bg-slate-50 text-slate-600 rounded-md hover:bg-red-50 hover:text-red-600"><i className="fa-solid fa-trash text-xs"></i></button>
                                                     </div>
+                                                    
+                                                    {/* NOMBRE DEL PROYECTO GRANDE Y RESALTADO */}
                                                     <div className="mb-4">
                                                         <span className="text-xs font-bold text-slate-400 uppercase tracking-wider block">N° {idx + 1} &bull; {order.id}</span>
                                                         <h3 className="text-xl font-black text-slate-900 mt-1 uppercase tracking-tight leading-tight line-clamp-2" title={order.servicio}>{order.servicio}</h3>
                                                         <p className="text-xs text-indigo-600 font-bold bg-indigo-50 inline-block px-2 py-0.5 rounded mt-2"><i className="fa-solid fa-tag"></i> {order.tipoServicio}</p>
                                                     </div>
+                                                    
+                                                    {/* DETALLE CON CLIENTE Y EMPRESA */}
                                                     <div className="space-y-1.5 text-sm border-t border-slate-100 pt-3 text-slate-600">
                                                         <div className="flex justify-between"><span>Cliente:</span><span className="font-semibold text-slate-800">{order.cliente}</span></div>
                                                         {order.empresa && <div className="flex justify-between"><span>Empresa:</span><span className="font-medium text-slate-500">{order.empresa}</span></div>}
+                                                        
                                                         {order.tipoServicio === 'Ingeniería' && (
                                                             <div className="bg-slate-50 p-2 rounded-lg text-xs space-y-1 text-slate-500 border border-slate-100 my-2">
                                                                 <div className="flex justify-between"><span>Tiempo Solicitud:</span><span className="font-bold text-indigo-600">{order.tiempoSolicitud || 'N/A'}</span></div>
@@ -889,13 +974,74 @@
                                                 <option value="Todos">Todos los clientes y empresas</option>
                                                 {financeFilterOptions.map(c => <option key={c} value={c}>{c}</option>)}
                                             </select>
+                                            <button onClick={() => setShowFinances(!showFinances)} className="bg-slate-100 hover:bg-slate-200 text-slate-600 px-4 py-2 rounded-lg flex items-center gap-2 transition-colors border border-slate-200 text-sm font-medium">
+                                                {showFinances ? <><i className="fa-solid fa-eye-slash"></i> Ocultar</> : <><i className="fa-solid fa-eye"></i> Mostrar</>}
+                                            </button>
                                             <button onClick={() => handlePrintFinance('all')} className="bg-slate-800 hover:bg-slate-700 text-white px-3 py-2 rounded-lg flex items-center gap-1 text-xs font-medium shadow-sm"><i className="fa-solid fa-file-pdf"></i> PDF Total</button>
                                             <button onClick={() => handlePrintFinance('pending')} className="bg-orange-600 hover:bg-orange-700 text-white px-3 py-2 rounded-lg flex items-center gap-1 text-xs font-medium shadow-sm"><i className="fa-solid fa-file-pdf"></i> PDF Deudas</button>
                                         </div>
                                     </div>
+                                    
                                     <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                                        <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-100"><h3 className="text-slate-500 font-medium mb-1">Facturado</h3><p className="text-3xl font-bold text-slate-800">S/ {orders.filter(o => o.estado !== 'Cancelado').filter(isFinanceMatch).reduce((sum, o) => sum + o.costoTotal, 0).toFixed(2)}</p></div>
-                                        <div className="bg-orange-50 p-6 rounded-xl shadow-sm border border-orange-100"><h3 className="text-orange-800 font-medium mb-1">Pendiente de Cobro</h3><p className="text-3xl font-bold text-orange-600">S/ {orders.filter(o => o.estado === 'Pendiente').filter(isFinanceMatch).reduce((sum, o) => sum + (o.costoTotal - o.adelanto), 0).toFixed(2)}</p></div>
+                                        <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-100">
+                                            <h3 className="text-slate-500 font-medium mb-1">Total Facturado</h3>
+                                            <p className={`text-3xl font-bold text-slate-800 ${showFinances ? '' : 'blur-md select-none transition-all'}`}>
+                                                S/ {orders.filter(o => o.estado !== 'Cancelado').filter(isFinanceMatch).reduce((sum, o) => sum + o.costoTotal, 0).toFixed(2)}
+                                            </p>
+                                        </div>
+                                        <div className="bg-orange-50 p-6 rounded-xl shadow-sm border border-orange-100">
+                                            <h3 className="text-orange-800 font-medium mb-1">Total Pendiente de Cobro</h3>
+                                            <p className={`text-3xl font-bold text-orange-600 ${showFinances ? '' : 'blur-md select-none transition-all'}`}>
+                                                S/ {orders.filter(o => o.estado === 'Pendiente').filter(isFinanceMatch).reduce((sum, o) => sum + (o.costoTotal - o.adelanto), 0).toFixed(2)}
+                                            </p>
+                                        </div>
+                                    </div>
+
+                                    {/* TABLA DE FINANZAS RESTAURADA */}
+                                    <div className="bg-white rounded-xl shadow-sm border border-slate-100 overflow-hidden mt-6">
+                                        <div className="p-4 bg-slate-50 border-b border-slate-100">
+                                            <h3 className="font-bold text-slate-700">Desglose de Órdenes</h3>
+                                        </div>
+                                        <div className="overflow-x-auto">
+                                            <table className="w-full text-left border-collapse min-w-[600px]">
+                                                <thead>
+                                                    <tr className="bg-white text-slate-500 text-sm border-b border-slate-100">
+                                                        <th className="p-4 font-medium">Orden</th>
+                                                        <th className="p-4 font-medium">Cliente</th>
+                                                        <th className="p-4 font-medium text-right">Costo Total</th>
+                                                        <th className="p-4 font-medium text-right">Abonado</th>
+                                                        <th className="p-4 font-medium text-right">Pendiente</th>
+                                                        <th className="p-4 font-medium text-center">Estado</th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody>
+                                                    {orders.filter(isFinanceMatch).map(o => {
+                                                        const pendiente = o.costoTotal - o.adelanto;
+                                                        return (
+                                                            <tr key={o.id} className="border-b border-slate-50 hover:bg-slate-50 transition-colors">
+                                                                <td className="p-4 text-sm font-medium text-indigo-600">{o.id}</td>
+                                                                <td className="p-4 text-sm text-slate-800">{o.cliente} {o.empresa && <span className="text-xs text-slate-500 block">{o.empresa}</span>}</td>
+                                                                <td className={`p-4 text-sm text-right ${showFinances ? 'text-slate-600' : 'blur-sm select-none'}`}>S/ {o.costoTotal.toFixed(2)}</td>
+                                                                <td className={`p-4 text-sm text-right ${showFinances ? 'text-emerald-600' : 'blur-sm select-none'}`}>S/ {o.adelanto.toFixed(2)}</td>
+                                                                <td className={`p-4 text-sm text-right font-bold ${showFinances ? (pendiente > 0 ? 'text-orange-600' : 'text-slate-400') : 'blur-sm select-none'}`}>
+                                                                    S/ {pendiente.toFixed(2)}
+                                                                </td>
+                                                                <td className="p-4 text-center">
+                                                                    <span className={`text-xs px-2 py-1 rounded-full ${o.estado === 'Pendiente' ? 'bg-orange-100 text-orange-700' : o.estado === 'Completado' ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-700'}`}>
+                                                                        {o.estado}
+                                                                    </span>
+                                                                </td>
+                                                            </tr>
+                                                        );
+                                                    })}
+                                                    {orders.filter(isFinanceMatch).length === 0 && (
+                                                        <tr>
+                                                            <td colSpan="6" className="p-8 text-center text-slate-400 italic">No hay órdenes para mostrar con este filtro.</td>
+                                                        </tr>
+                                                    )}
+                                                </tbody>
+                                            </table>
+                                        </div>
                                     </div>
                                 </div>
                             )}
