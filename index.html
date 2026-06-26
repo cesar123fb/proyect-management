@@ -141,6 +141,27 @@
                 const clientsRef = db.collection('artifacts').doc(appId).collection('users').doc(user.uid).collection('clients');
                 const unsubscribeClients = clientsRef.onSnapshot((snapshot) => {
                     const fetchedClients = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                    fetchedClients.sort((a, b) => a.nombre.localeCompare(b.nombre));
+                    setClientsList(fetchedClients);
+                }, (error) => console.error(error));
+
+                const activitiesRef = db.collection('artifacts').doc(appId).collection('users').doc(user.uid).collection('activities');
+                const unsubscribeActivities = activitiesRef.onSnapshot((snapshot) => {
+                    const fetchedActivities = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                    setActivitiesList(fetchedActivities);
+                    setLoadingData(false);
+                }, (error) => {
+                    console.error("Error al obtener actividades:", error);
+                    setLoadingData(false);
+                });
+
+                return () => {
+                    unsubscribeOrders();
+                    unsubscribeClients();
+                    unsubscribeActivities();
+                };
+            }, [user]);
+
             // Efecto para inicializar/actualizar la Gráfica Interactiva
             useEffect(() => {
                 if (view === 'dashboard' && !loadingData) {
@@ -1142,3 +1163,4 @@
         root.render(<App />);
     </script>
 </body>
+</html>
