@@ -17,6 +17,8 @@
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
     
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     
     <script>
         Babel.registerPreset('react-classic', {
@@ -63,7 +65,7 @@
             // Estados Principales
             const [orders, setOrders] = useState([]);
             const [clientsList, setClientsList] = useState([]);
-            const [activitiesList, setActivitiesList] = useState([]); // Nuevo estado para las actividades del calendario
+            const [activitiesList, setActivitiesList] = useState([]);
             const [user, setUser] = useState(null);
             const [authChecking, setAuthChecking] = useState(true);
             const [loadingData, setLoadingData] = useState(false);
@@ -88,26 +90,26 @@
             const [dashboardClientFilter, setDashboardClientFilter] = useState('Todos');
             const [ordersClientFilter, setOrdersClientFilter] = useState('Todos');
             const [dashboardServiceFilter, setDashboardServiceFilter] = useState('Todos');
-            const [financeToPrint, setFinanceToPrint] = useState(null); // 'all' o 'pending'
+            const [financeToPrint, setFinanceToPrint] = useState(null);
 
-            // Nuevos Estados para Calendario, Ingresos y Botón Guardar
             const [isSaving, setIsSaving] = useState(false);
             const [calendarDate, setCalendarDate] = useState(new Date());
             const [incomeMonth, setIncomeMonth] = useState(new Date().toISOString().slice(0, 7));
 
-            // Formularios
+            // Formularios (Sin teléfono ni imágenes)
             const [formData, setFormData] = useState({
-                cliente: '', empresa: '', telefono: '', servicio: '', extras: '',
-                costoTotal: '', depositos: [], estado: 'Pendiente', imagenes: [],
+                cliente: '', empresa: '', servicio: '', extras: '',
+                costoTotal: '', depositos: [], estado: 'Pendiente',
                 fechaSolicitud: new Date().toISOString().split('T')[0],
-                tipoServicio: 'Diseños'
+                tipoServicio: 'Diseños',
+                tiempoSolicitud: '', fechaConclusion: ''
             });
 
             const [clientFormData, setClientFormData] = useState({
-                nombre: '', telefono: '', empresas: ['']
+                nombre: '', empresas: ['']
             });
 
-            // 1. Control de Autenticación
+            // Control de Autenticación
             useEffect(() => {
                 const unsubscribe = auth.onAuthStateChanged((currentUser) => {
                     setUser(currentUser);
@@ -116,7 +118,7 @@
                 return () => unsubscribe();
             }, []);
 
-            // 2. Cargar datos desde Firestore
+            // Cargar datos desde Firestore
             useEffect(() => {
                 if (!user) return;
                 setLoadingData(true);
@@ -152,7 +154,46 @@
                 };
             }, [user]);
 
-            // --- Manejador de Login/Registro ---
+            // Efecto para inicializar/actualizar la Gráfica Interactiva
+            useEffect(() => {
+                if (view === 'dashboard' && !loadingData) {
+                    const ctx = document.getElementById('dashboardChart');
+                    if (ctx) {
+                        const existingChart = Chart.getChart(ctx);
+                        if (existingChart) existingChart.destroy();
+
+                        const statusCounts = { Pendiente: 0, Completado: 0, Cancelado: 0 };
+                        orders.forEach(o => {
+                            if (statusCounts[o.estado] !== undefined) statusCounts[o.estado]++;
+                        });
+
+                        new Chart(ctx, {
+                            type: 'bar',
+                            data: {
+                                labels: ['🟡 Pendientes', '🟢 Completados', '🔴 Cancelados'],
+                                datasets: [{
+                                    label: 'Cantidad de Órdenes',
+                                    data: [statusCounts.Pendiente, statusCounts.Completado, statusCounts.Cancelado],
+                                    backgroundColor: ['#f89a1c', '#10b981', '#ef4444'],
+                                    borderRadius: 8,
+                                    borderWidth: 1
+                                }]
+                            },
+                            options: {
+                                responsive: true,
+                                maintainAspectRatio: false,
+                                plugins: {
+                                    legend: { display: false }
+                                },
+                                scales: {
+                                    y: { beginAtZero: true, ticks: { stepSize: 1 } }
+                                }
+                            }
+                        });
+                    }
+                }
+            }, [view, orders, loadingData]);
+
             const handleAuth = async (e) => {
                 e.preventDefault();
                 setAuthError('');
@@ -163,25 +204,21 @@
                         await auth.signInWithEmailAndPassword(authEmail, authPassword);
                     }
                 } catch (error) {
-                    console.error("Error de autenticación:", error);
                     if (error.code === 'auth/email-already-in-use') setAuthError('Este correo ya está registrado.');
                     else if (error.code === 'auth/wrong-password' || error.code === 'auth/invalid-credential') setAuthError('Correo o contraseña incorrectos.');
                     else if (error.code === 'auth/user-not-found') setAuthError('Usuario no encontrado.');
                     else if (error.code === 'auth/weak-password') setAuthError('La contraseña debe tener al menos 6 caracteres.');
-                    else if (error.code === 'auth/operation-not-allowed') setAuthError('Error: Aún no has activado el registro en Firebase. Ve a Authentication > Sign-in method y habilita Correo/Contraseña.');
+                    else if (error.code === 'auth/operation-not-allowed') setAuthError('Habilite el método Correo/Contraseña en Firebase.');
                     else setAuthError('Ocurrió un error: ' + error.message);
                 }
             };
 
-            // --- Cálculos y Estadísticas ---
             const stats = useMemo(() => {
                 const clientsCount = clientsList.length;
                 const activeCount = orders.filter(o => o.estado === 'Pendiente').length;
                 const completedCount = orders.filter(o => o.estado === 'Completado').length;
                 const cancelledCount = orders.filter(o => o.estado === 'Cancelado').length;
-                const totalRevenue = orders.filter(o => o.estado !== 'Cancelado').reduce((sum, o) => sum + o.costoTotal, 0);
-                const pendingMoney = orders.filter(o => o.estado === 'Pendiente').reduce((sum, o) => sum + (o.costoTotal - o.adelanto), 0);
-                return { clientsCount, activeCount, completedCount, cancelledCount, totalRevenue, pendingMoney };
+                return { clientsCount, activeCount, completedCount, cancelledCount };
             }, [orders, clientsList]);
 
             const clientsWithStats = useMemo(() => {
@@ -195,13 +232,12 @@
 
             const goTo = (newView) => { setView(newView); setSearchTerm(''); };
 
-            // --- Manejadores de ÓRDENES ---
             const handleNewOrder = () => {
                 setFormData({
-                    cliente: '', empresa: '', telefono: '', servicio: '', extras: '', costoTotal: '',
-                    depositos: [], estado: 'Pendiente', imagenes: [],
+                    cliente: '', empresa: '', servicio: '', extras: '', costoTotal: '',
+                    depositos: [], estado: 'Pendiente',
                     fechaSolicitud: new Date().toISOString().split('T')[0],
-                    tipoServicio: 'Diseños'
+                    tipoServicio: 'Diseños', tiempoSolicitud: '', fechaConclusion: ''
                 });
                 setEditingId(null);
                 goTo('form');
@@ -217,7 +253,7 @@
                 const { name, value } = e.target;
                 if (name === 'cliente') {
                     const selectedClient = clientsList.find(c => c.nombre === value);
-                    setFormData(prev => ({ ...prev, cliente: value, empresa: '', telefono: selectedClient ? selectedClient.telefono : prev.telefono }));
+                    setFormData(prev => ({ ...prev, cliente: value, empresa: '' }));
                 } else {
                     setFormData(prev => ({ ...prev, [name]: value }));
                 }
@@ -225,7 +261,7 @@
 
             const handleSaveOrder = async (e) => {
                 e.preventDefault();
-                if (isSaving) return; // Evita clics dobles
+                if (isSaving) return;
 
                 if (!formData.cliente || !formData.servicio || !formData.costoTotal) {
                     setModal({ isOpen: true, type: 'alert', message: 'Por favor, llena los campos obligatorios.' }); 
@@ -247,15 +283,14 @@
                 }
             };
 
-            // --- Manejadores de CLIENTES ---
             const handleNewClient = () => {
-                setClientFormData({ nombre: '', telefono: '', empresas: [''] });
+                setClientFormData({ nombre: '', empresas: [''] });
                 setEditingId(null);
                 goTo('client-form');
             };
 
             const handleEditClient = (client) => {
-                setClientFormData({ nombre: client.nombre, telefono: client.telefono || '', empresas: client.empresas && client.empresas.length > 0 ? client.empresas : [''] });
+                setClientFormData({ nombre: client.nombre, empresas: client.empresas && client.empresas.length > 0 ? client.empresas : [''] });
                 setEditingId(client.id);
                 goTo('client-form');
             };
@@ -277,7 +312,7 @@
                 e.preventDefault();
                 if (!clientFormData.nombre) { setModal({ isOpen: true, type: 'alert', message: 'El nombre es obligatorio.' }); return; }
                 const cleanEmpresas = clientFormData.empresas.filter(emp => emp.trim() !== '');
-                const clientData = { nombre: clientFormData.nombre, telefono: clientFormData.telefono, empresas: cleanEmpresas };
+                const clientData = { nombre: clientFormData.nombre, empresas: cleanEmpresas };
 
                 try {
                     const newId = editingId || `CLI-${Math.floor(Math.random() * 10000).toString().padStart(4, '0')}`;
@@ -286,7 +321,6 @@
                 } catch (error) { setModal({ isOpen: true, type: 'alert', message: 'Error al guardar.' }); }
             };
 
-            // --- Manejadores de ACTIVIDADES (Calendario) ---
             const openActivityModal = (dateStr) => {
                 setActivityModal({ isOpen: true, date: dateStr, desc: '', horas: '', ordenId: '' });
             };
@@ -304,14 +338,13 @@
                     });
                     setActivityModal({ ...activityModal, isOpen: false });
                 } catch(error) {
-                    console.error("Error al guardar actividad:", error);
+                    console.error(error);
                 }
             };
 
-            // --- ELIMINAR ---
             const requestDelete = (e, type, id) => {
                 e.stopPropagation();
-                let message = '¿Estás seguro de continuar?';
+                let message = '¿Deseas eliminar este registro?';
                 if (type === 'order') message = '¿Deseas eliminar esta orden?';
                 if (type === 'client') message = '¿Deseas eliminar a este cliente?';
                 if (type === 'activity') message = '¿Deseas eliminar esta actividad del calendario?';
@@ -333,9 +366,8 @@
             };
 
             const handlePrint = (client) => setClientToPrint(client); 
-            const handlePrintFinance = (type) => setFinanceToPrint(type); // 'all' o 'pending'
+            const handlePrintFinance = (type) => setFinanceToPrint(type);
 
-            // Efecto robusto para impresión
             useEffect(() => {
                 if (clientToPrint || financeToPrint) {
                     const timer = setTimeout(() => {
@@ -347,7 +379,6 @@
                 }
             }, [clientToPrint, financeToPrint]);
 
-            // Depósitos e Imágenes
             const handleAddDeposito = () => setFormData(prev => ({...prev, depositos: [...(prev.depositos || []), { monto: '', fecha: new Date().toISOString().split('T')[0] }]}));
             const handleDepositoChange = (index, field, value) => {
                 const newDepositos = [...(formData.depositos || [])];
@@ -355,18 +386,6 @@
                 setFormData(prev => ({ ...prev, depositos: newDepositos }));
             };
             const handleRemoveDeposito = (index) => setFormData(prev => ({ ...prev, depositos: (prev.depositos || []).filter((_, i) => i !== index) }));
-            const handleImageUpload = (e) => {
-                const files = Array.from(e.target.files);
-                Promise.all(files.map(file => {
-                    return new Promise((resolve, reject) => {
-                        const reader = new FileReader();
-                        reader.readAsDataURL(file);
-                        reader.onload = () => resolve(reader.result);
-                        reader.onerror = error => reject(error);
-                    });
-                })).then(base64Images => setFormData(prev => ({ ...prev, imagenes: [...(prev.imagenes || []), ...base64Images] })));
-            };
-            const removeImage = (index) => setFormData(prev => ({ ...prev, imagenes: prev.imagenes.filter((_, i) => i !== index) }));
 
             const filteredOrders = orders.filter(o => 
                 (statusFilter === 'Todos' || o.estado === statusFilter) &&
@@ -379,7 +398,6 @@
             const selectedClientData = clientsList.find(c => c.nombre === formData.cliente);
             const clientCompanies = selectedClientData?.empresas || [];
 
-            // Opciones y lógica de filtrado para Finanzas (Cliente + Empresa)
             const financeFilterOptions = useMemo(() => {
                 const options = new Set();
                 orders.forEach(o => {
@@ -398,7 +416,6 @@
                 return o.cliente === financeClientFilter;
             };
 
-            // Datos de Ingresos
             const depositsData = useMemo(() => {
                 const allDeps = [];
                 let monthlyTotal = 0;
@@ -407,15 +424,13 @@
                         o.depositos.forEach(dep => {
                             const depDate = dep.fecha || '';
                             const isCurrentMonth = depDate.startsWith(incomeMonth);
-                            if (isCurrentMonth) {
-                                monthlyTotal += parseFloat(dep.monto) || 0;
-                            }
+                            if (isCurrentMonth) monthlyTotal += parseFloat(dep.monto) || 0;
                             allDeps.push({
                                 ...dep,
                                 isCurrentMonth,
                                 ordenId: o.id,
                                 cliente: o.cliente,
-                                actividad: o.servicio // mapeo de Actividad
+                                actividad: o.servicio
                             });
                         });
                     }
@@ -424,7 +439,6 @@
                 return { all: allDeps, monthlyTotal };
             }, [orders, incomeMonth]);
 
-            // Datos de Calendario
             const firstDayOfMonth = new Date(calendarDate.getFullYear(), calendarDate.getMonth(), 1).getDay();
             const daysInMonth = new Date(calendarDate.getFullYear(), calendarDate.getMonth() + 1, 0).getDate();
             const prevMonth = () => setCalendarDate(new Date(calendarDate.getFullYear(), calendarDate.getMonth() - 1, 1));
@@ -432,62 +446,16 @@
             
             const calendarDays = Array.from({ length: daysInMonth }, (_, i) => {
                 const day = i + 1;
-                // Formato YYYY-MM-DD resistente a zonas horarias
                 const dateStr = `${calendarDate.getFullYear()}-${String(calendarDate.getMonth() + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
                 const dayOrders = orders.filter(o => o.estado === 'Pendiente' && o.fechaSolicitud === dateStr);
                 const dayActivities = activitiesList.filter(a => a.fecha === dateStr);
                 return { day, dateStr, dayOrders, dayActivities };
             });
 
-            // PANTALLA DE CARGA INICIAL
-            if (authChecking) {
-                return (
-                    <div className="min-h-screen bg-slate-50 flex flex-col items-center justify-center text-indigo-600">
-                        <i className="fa-solid fa-spinner fa-spin mb-4 text-5xl"></i>
-                    </div>
-                );
-            }
-
-            // PANTALLA DE LOGIN
-            if (!user) {
-                return (
-                    <div className="min-h-screen bg-slate-100 flex items-center justify-center p-4 relative overflow-hidden">
-                        <div className="absolute top-[-10%] left-[-10%] w-96 h-96 bg-indigo-300 rounded-full mix-blend-multiply filter blur-3xl opacity-30 animate-blob"></div>
-                        <div className="absolute top-[20%] right-[-10%] w-96 h-96 bg-orange-300 rounded-full mix-blend-multiply filter blur-3xl opacity-30 animate-blob animation-delay-2000"></div>
-                        <div className="bg-white p-8 rounded-2xl shadow-xl max-w-md w-full relative z-10">
-                            <div className="text-center mb-8">
-                                <div className="bg-indigo-600 text-white w-16 h-16 rounded-xl flex items-center justify-center mx-auto mb-4 shadow-lg"><i className="fa-solid fa-briefcase text-3xl"></i></div>
-                                <h2 className="text-2xl font-bold text-slate-800">DesignManager Pro</h2>
-                                <p className="text-slate-500 mt-2">{isRegistering ? 'Crea tu cuenta administradora' : 'Inicia sesión para gestionar tus órdenes'}</p>
-                            </div>
-                            <form onSubmit={handleAuth} className="space-y-5">
-                                <div>
-                                    <label className="block text-sm font-medium text-slate-700 mb-1">Correo Electrónico</label>
-                                    <input type="email" required value={authEmail} onChange={e=>setAuthEmail(e.target.value)} className="w-full p-3 border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:outline-none" placeholder="tu@correo.com" />
-                                </div>
-                                <div>
-                                    <label className="block text-sm font-medium text-slate-700 mb-1">Contraseña</label>
-                                    <input type="password" required value={authPassword} onChange={e=>setAuthPassword(e.target.value)} className="w-full p-3 border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:outline-none" placeholder="••••••••" />
-                                </div>
-                                {authError && <div className="bg-red-50 text-red-600 p-3 rounded-lg text-sm flex items-start gap-2 text-left leading-tight"><i className="fa-solid fa-circle-exclamation mt-0.5"></i> <span>{authError}</span></div>}
-                                <button type="submit" className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold p-3 rounded-lg transition-colors shadow-md">
-                                    {isRegistering ? 'Crear Cuenta' : 'Ingresar al Sistema'}
-                                </button>
-                            </form>
-                            <div className="mt-6 text-center">
-                                <button type="button" onClick={()=>{setIsRegistering(!isRegistering); setAuthError('');}} className="text-sm text-indigo-600 hover:text-indigo-800 font-medium">
-                                    {isRegistering ? '¿Ya tienes cuenta? Inicia sesión aquí' : '¿No tienes cuenta? Regístrate aquí'}
-                                </button>
-                            </div>
-                        </div>
-                    </div>
-                );
-            }
-
             return (
                 <div className="min-h-screen">
                     
-                    {/* Modal Confirmación / Alertas */}
+                    {/* Modales */}
                     {modal.isOpen && (
                         <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-[100] flex items-center justify-center p-4">
                             <div className="bg-white rounded-xl shadow-xl max-w-md w-full p-6">
@@ -506,10 +474,10 @@
 
                     {/* Modal Actividad Calendario */}
                     {activityModal.isOpen && (
-                        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-[100] flex items-center justify-center p-4">
-                            <div className="bg-white rounded-xl shadow-xl max-w-md w-full p-6">
+                        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-[100] flex items-center justify-center p-4" onClick={() => setActivityModal({...activityModal, isOpen: false})}>
+                            <div className="bg-white rounded-xl shadow-xl max-w-md w-full p-6" onClick={(e) => e.stopPropagation()}>
                                 <h3 className="text-lg font-bold text-slate-800 mb-4 flex items-center gap-2">
-                                    <i className="fa-solid fa-clock-rotate-left text-emerald-500"></i> Registrar Actividad
+                                    <i className="fa-solid fa-clock-rotate-left text-emerald-500"></i> Registrar Actividad / Visita
                                 </h3>
                                 <div className="space-y-4">
                                     <div>
@@ -518,112 +486,88 @@
                                     </div>
                                     <div>
                                         <label className="block text-xs font-bold text-slate-500 mb-1">Descripción de la tarea *</label>
-                                        <input type="text" value={activityModal.desc} onChange={(e) => setActivityModal({...activityModal, desc: e.target.value})} className="w-full border border-slate-200 focus:ring-2 focus:ring-emerald-500 outline-none p-2 rounded-lg text-sm" placeholder="Ej: Visita al cliente, diseño preliminar..." />
+                                        <input type="text" value={activityModal.desc} onChange={(e) => setActivityModal({...activityModal, desc: e.target.value})} className="w-full border border-slate-200 focus:ring-2 focus:ring-emerald-500 outline-none p-2 rounded-lg text-sm" placeholder="Ej: Visita técnica, mantenimiento..." />
                                     </div>
                                     <div>
                                         <label className="block text-xs font-bold text-slate-500 mb-1">Horas Invertidas</label>
-                                        <input type="number" step="0.5" min="0" value={activityModal.horas} onChange={(e) => setActivityModal({...activityModal, horas: e.target.value})} className="w-full border border-slate-200 focus:ring-2 focus:ring-emerald-500 outline-none p-2 rounded-lg text-sm" placeholder="Ej: 2.5" />
+                                        <input type="number" step="0.5" min="0" value={activityModal.horas} onChange={(e) => setActivityModal({...activityModal, horas: e.target.value})} className="w-full border border-slate-200 focus:ring-2 focus:ring-emerald-500 outline-none p-2 rounded-lg text-sm" placeholder="Ej: 3" />
                                     </div>
                                     <div>
                                         <label className="block text-xs font-bold text-slate-500 mb-1">Vincular a Proyecto (Opcional)</label>
                                         <select value={activityModal.ordenId} onChange={(e) => setActivityModal({...activityModal, ordenId: e.target.value})} className="w-full border border-slate-200 focus:ring-2 focus:ring-emerald-500 outline-none p-2 rounded-lg text-sm bg-white">
                                             <option value="">-- Sin vincular --</option>
                                             {orders.filter(o => o.estado === 'Pendiente').map(o => (
-                                                <option key={o.id} value={o.id}>{o.cliente} - {o.servicio.substring(0,20)}...</option>
+                                                <option key={o.id} value={o.id}>{o.cliente} - {o.servicio.substring(0,25)}...</option>
                                             ))}
                                         </select>
                                     </div>
                                 </div>
                                 <div className="flex justify-end gap-3 mt-6 pt-4 border-t border-slate-100">
                                     <button onClick={() => setActivityModal({...activityModal, isOpen: false})} className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-sm font-bold transition-colors">Cancelar</button>
-                                    <button onClick={handleSaveActivity} disabled={!activityModal.desc} className={`px-4 py-2 text-white rounded-lg text-sm font-bold transition-colors ${!activityModal.desc ? 'bg-slate-300 cursor-not-allowed' : 'bg-emerald-600 hover:bg-emerald-700'}`}>Guardar Actividad</button>
+                                    <button onClick={handleSaveActivity} disabled={!activityModal.desc} className={`px-4 py-2 text-white rounded-lg text-sm font-bold transition-colors ${!activityModal.desc ? 'bg-slate-300 cursor-not-allowed' : 'bg-emerald-600 hover:bg-emerald-700'}`}>Guardar</button>
                                 </div>
                             </div>
                         </div>
                     )}
 
-                    {/* Vista PDF de Clientes */}
+                    {/* Vistas de Impresión PDF */}
                     {clientToPrint && (
                         <div className="hidden print:block absolute top-0 left-0 w-full bg-white p-8 z-50">
                             <div className="border-b-2 border-indigo-600 pb-6 mb-6 flex justify-between items-end">
                                 <div><h1 className="text-3xl font-bold text-slate-800">Estado de Cuenta</h1><p className="text-slate-500 mt-1">DesignManager Pro</p></div>
-                                <div className="text-right"><p className="font-bold text-slate-800">{clientToPrint.nombre}</p><p className="text-slate-500">Tel: {clientToPrint.telefono || 'N/A'}</p><p className="text-slate-500">Fecha: {new Date().toLocaleDateString()}</p></div>
+                                <div className="text-right"><p className="font-bold text-slate-800">{clientToPrint.nombre}</p><p className="text-slate-500">Fecha: {new Date().toLocaleDateString()}</p></div>
                             </div>
-                            <h2 className="text-xl font-bold mb-4 text-slate-700">Resumen de Órdenes Pendientes</h2>
                             <table className="w-full text-left border-collapse">
                                 <thead>
                                     <tr className="bg-slate-100 text-slate-700">
-                                        <th className="p-3 border-b">ID Orden / Empresa</th><th className="p-3 border-b">Actividad</th><th className="p-3 border-b text-right">Costo Total</th><th className="p-3 border-b text-right">Abonado</th><th className="p-3 border-b text-right font-bold">Pendiente</th>
+                                        <th className="p-3 border-b">ID / Empresa</th><th className="p-3 border-b">Actividad</th><th className="p-3 border-b text-right">Total</th><th className="p-3 border-b text-right">Abonado</th><th className="p-3 border-b text-right font-bold">Pendiente</th>
                                     </tr>
                                 </thead>
                                 <tbody>
-                                    {clientToPrint.ordenes.filter(o => o.estado === 'Pendiente').map(o => {
-                                        const pendiente = o.costoTotal - o.adelanto;
-                                        return (
-                                            <tr key={o.id} className="border-b">
-                                                <td className="p-3 text-sm text-slate-600">{o.id} <br/>{o.empresa && <span className="font-bold text-indigo-500 text-xs">{o.empresa}</span>}</td>
-                                                <td className="p-3 text-sm text-slate-800">{o.servicio}</td>
-                                                <td className="p-3 text-sm text-right">S/ {o.costoTotal.toFixed(2)}</td>
-                                                <td className="p-3 text-sm text-right text-emerald-600">S/ {o.adelanto.toFixed(2)}</td>
-                                                <td className="p-3 text-sm text-right font-bold text-orange-600">S/ {pendiente.toFixed(2)}</td>
-                                            </tr>
-                                        );
-                                    })}
-                                    {clientToPrint.ordenes.filter(o => o.estado === 'Pendiente').length === 0 && (<tr><td colSpan="5" className="p-4 text-center text-slate-500">No hay órdenes con saldo pendiente.</td></tr>)}
+                                    {clientToPrint.ordenes.filter(o => o.estado === 'Pendiente').map(o => (
+                                        <tr key={o.id} className="border-b">
+                                            <td className="p-3 text-sm text-slate-600">{o.id} {o.empresa && <span>({o.empresa})</span>}</td>
+                                            <td className="p-3 text-sm text-slate-800">{o.servicio}</td>
+                                            <td className="p-3 text-sm text-right">S/ {o.costoTotal.toFixed(2)}</td>
+                                            <td className="p-3 text-sm text-right text-emerald-600">S/ {o.adelanto.toFixed(2)}</td>
+                                            <td className="p-3 text-sm text-right font-bold text-orange-600">S/ {(o.costoTotal - o.adelanto).toFixed(2)}</td>
+                                        </tr>
+                                    ))}
                                 </tbody>
-                                <tfoot><tr className="bg-slate-50"><td colSpan="4" className="p-3 text-right font-bold text-slate-700">TOTAL A PAGAR:</td><td className="p-3 text-right font-bold text-xl text-indigo-600">S/ {clientToPrint.saldoPendiente.toFixed(2)}</td></tr></tfoot>
+                                <tfoot><tr className="bg-slate-50"><td colSpan="4" className="p-3 text-right font-bold text-slate-700">TOTAL:</td><td className="p-3 text-right font-bold text-xl text-indigo-600">S/ {clientToPrint.saldoPendiente.toFixed(2)}</td></tr></tfoot>
                             </table>
                         </div>
                     )}
 
-                    {/* Vista PDF de Finanzas */}
+                    {/* PDF de Finanzas */}
                     {financeToPrint && (
                         <div className="hidden print:block absolute top-0 left-0 w-full bg-white p-8 z-50">
                             <div className="border-b-2 border-indigo-600 pb-6 mb-6 flex justify-between items-end">
-                                <div>
-                                    <h1 className="text-3xl font-bold text-slate-800">
-                                        {financeToPrint === 'pending' ? 'Reporte de Saldos Pendientes' : 'Reporte Financiero Total'}
-                                    </h1>
-                                    <p className="text-slate-500 mt-1">DesignManager Pro</p>
-                                </div>
-                                <div className="text-right">
-                                    <p className="font-bold text-slate-800">Filtro: {financeClientFilter}</p>
-                                    <p className="text-slate-500">Fecha: {new Date().toLocaleDateString()}</p>
-                                </div>
+                                <div><h1 className="text-3xl font-bold text-slate-800">{financeToPrint === 'pending' ? 'Reporte de Saldos Pendientes' : 'Reporte Financiero Completo'}</h1></div>
+                                <div className="text-right"><p className="font-bold text-slate-800">Filtro: {financeClientFilter}</p><p className="text-slate-500">Fecha: {new Date().toLocaleDateString()}</p></div>
                             </div>
                             <table className="w-full text-left border-collapse">
                                 <thead>
                                     <tr className="bg-slate-100 text-slate-700">
-                                        <th className="p-3 border-b">Cliente / Empresa</th><th className="p-3 border-b">Actividad</th><th className="p-3 border-b text-right">Facturado</th><th className="p-3 border-b text-right">Abonado</th><th className="p-3 border-b text-right font-bold">Pendiente</th>
+                                        <th className="p-3 border-b">Cliente</th><th className="p-3 border-b">Actividad</th><th className="p-3 border-b text-right">Facturado</th><th className="p-3 border-b text-right">Abonado</th><th className="p-3 border-b text-right font-bold">Pendiente</th>
                                     </tr>
                                 </thead>
                                 <tbody>
-                                    {orders.filter(isFinanceMatch).filter(o => financeToPrint === 'pending' ? (o.costoTotal - o.adelanto) > 0 : true).map(o => {
-                                        const pendiente = o.costoTotal - o.adelanto;
-                                        return (
-                                            <tr key={o.id} className="border-b">
-                                                <td className="p-3 text-sm text-slate-600 font-bold">{o.cliente} <br/>{o.empresa && <span className="font-normal text-indigo-500 text-xs">{o.empresa}</span>}</td>
-                                                <td className="p-3 text-sm text-slate-800">{o.servicio}</td>
-                                                <td className="p-3 text-sm text-right">S/ {o.costoTotal.toFixed(2)}</td>
-                                                <td className="p-3 text-sm text-right text-emerald-600">S/ {o.adelanto.toFixed(2)}</td>
-                                                <td className="p-3 text-sm text-right font-bold text-orange-600">S/ {pendiente.toFixed(2)}</td>
-                                            </tr>
-                                        );
-                                    })}
+                                    {orders.filter(isFinanceMatch).filter(o => financeToPrint === 'pending' ? (o.costoTotal - o.adelanto) > 0 : true).map(o => (
+                                        <tr key={o.id} className="border-b">
+                                            <td className="p-3 text-sm font-bold text-slate-700">{o.cliente} {o.empresa && <span className="text-xs font-normal block text-slate-500">{o.empresa}</span>}</td>
+                                            <td className="p-3 text-sm text-slate-800">{o.servicio}</td>
+                                            <td className="p-3 text-sm text-right">S/ {o.costoTotal.toFixed(2)}</td>
+                                            <td className="p-3 text-sm text-right text-emerald-600">S/ {o.adelanto.toFixed(2)}</td>
+                                            <td className="p-3 text-sm text-right font-bold text-orange-600">S/ {(o.costoTotal - o.adelanto).toFixed(2)}</td>
+                                        </tr>
+                                    ))}
                                 </tbody>
-                                <tfoot>
-                                    <tr className="bg-slate-50">
-                                        <td colSpan="2" className="p-3 text-right font-bold text-slate-700">TOTALES:</td>
-                                        <td className="p-3 text-right font-bold text-slate-800">S/ {orders.filter(o => o.estado !== 'Cancelado').filter(isFinanceMatch).filter(o => financeToPrint === 'pending' ? (o.costoTotal - o.adelanto) > 0 : true).reduce((sum, o) => sum + o.costoTotal, 0).toFixed(2)}</td>
-                                        <td className="p-3 text-right font-bold text-emerald-600">S/ {orders.filter(isFinanceMatch).filter(o => financeToPrint === 'pending' ? (o.costoTotal - o.adelanto) > 0 : true).reduce((sum, o) => sum + o.adelanto, 0).toFixed(2)}</td>
-                                        <td className="p-3 text-right font-bold text-xl text-orange-600">S/ {orders.filter(o => o.estado === 'Pendiente').filter(isFinanceMatch).filter(o => financeToPrint === 'pending' ? (o.costoTotal - o.adelanto) > 0 : true).reduce((sum, o) => sum + (o.costoTotal - o.adelanto), 0).toFixed(2)}</td>
-                                    </tr>
-                                </tfoot>
                             </table>
                         </div>
                     )}
 
-                    {/* INTERFAZ PRINCIPAL */}
+                    {/* INTERFAZ GENERAL */}
                     <div className="print:hidden">
                         <nav className="bg-indigo-600 text-white p-4 shadow-md sticky top-0 z-40">
                             <div className="max-w-6xl mx-auto flex flex-col sm:flex-row justify-between items-center gap-4">
@@ -634,144 +578,146 @@
                                 <div className="flex items-center gap-4">
                                     <div className="flex bg-indigo-700 rounded-lg p-1 overflow-x-auto">
                                         <button onClick={() => goTo('dashboard')} className={`px-4 py-2 rounded-md flex items-center gap-2 text-sm font-medium transition-colors ${view === 'dashboard' ? 'bg-white text-indigo-700 shadow' : 'text-indigo-100 hover:text-white hover:bg-indigo-600'}`}>
-                                            <i className="fa-solid fa-table-cells-large"></i> <span className="hidden sm:inline">Índice</span>
+                                            <i className="fa-solid fa-table-cells-large"></i> <span>Índice</span>
                                         </button>
                                         <button onClick={() => goTo('calendar')} className={`px-4 py-2 rounded-md flex items-center gap-2 text-sm font-medium transition-colors ${view === 'calendar' ? 'bg-white text-indigo-700 shadow' : 'text-indigo-100 hover:text-white hover:bg-indigo-600'}`}>
-                                            <i className="fa-solid fa-calendar-days"></i> <span className="hidden sm:inline">Calendario</span>
+                                            <i className="fa-solid fa-calendar-days"></i> <span>Calendario</span>
                                         </button>
                                         <button onClick={() => goTo('orders')} className={`px-4 py-2 rounded-md flex items-center gap-2 text-sm font-medium transition-colors ${view === 'orders' || view === 'form' ? 'bg-white text-indigo-700 shadow' : 'text-indigo-100 hover:text-white hover:bg-indigo-600'}`}>
-                                            <i className="fa-solid fa-file-lines"></i> <span className="hidden sm:inline">Órdenes</span>
+                                            <i className="fa-solid fa-file-lines"></i> <span>Órdenes</span>
                                         </button>
                                         <button onClick={() => goTo('clients')} className={`px-4 py-2 rounded-md flex items-center gap-2 text-sm font-medium transition-colors ${view === 'clients' || view === 'client-form' ? 'bg-white text-indigo-700 shadow' : 'text-indigo-100 hover:text-white hover:bg-indigo-600'}`}>
-                                            <i className="fa-solid fa-users"></i> <span className="hidden sm:inline">Clientes</span>
+                                            <i className="fa-solid fa-users"></i> <span>Clientes</span>
                                         </button>
                                         <button onClick={() => goTo('finances')} className={`px-4 py-2 rounded-md flex items-center gap-2 text-sm font-medium transition-colors ${view === 'finances' ? 'bg-white text-indigo-700 shadow' : 'text-indigo-100 hover:text-white hover:bg-indigo-600'}`}>
-                                            <i className="fa-solid fa-chart-pie"></i> <span className="hidden sm:inline">Finanzas</span>
+                                            <i className="fa-solid fa-chart-pie"></i> <span>Finanzas</span>
                                         </button>
                                         <button onClick={() => goTo('income')} className={`px-4 py-2 rounded-md flex items-center gap-2 text-sm font-medium transition-colors ${view === 'income' ? 'bg-white text-indigo-700 shadow' : 'text-indigo-100 hover:text-white hover:bg-indigo-600'}`}>
-                                            <i className="fa-solid fa-money-bill-wave"></i> <span className="hidden sm:inline">Ingresos</span>
+                                            <i className="fa-solid fa-money-bill-wave"></i> <span>Ingresos</span>
                                         </button>
                                     </div>
-                                    <button onClick={() => auth.signOut()} title="Cerrar Sesión" className="text-indigo-200 hover:text-white bg-indigo-800 p-2 rounded-lg transition-colors">
-                                        <i className="fa-solid fa-right-from-bracket"></i>
-                                    </button>
+                                    <button onClick={() => auth.signOut()} class="text-indigo-200 hover:text-white bg-indigo-800 p-2 rounded-lg transition-colors"><i class="fa-solid fa-right-from-bracket"></i></button>
                                 </div>
                             </div>
                         </nav>
 
                         <main className="max-w-6xl mx-auto p-4 mt-4">
-                            {loadingData && (
-                                <div className="text-center py-10">
-                                    <i className="fa-solid fa-spinner fa-spin text-3xl text-indigo-600 mb-2"></i>
-                                    <p className="text-slate-500">Cargando datos...</p>
-                                </div>
-                            )}
-
-                            {/* DASHBOARD */}
-                            {!loadingData && view === 'dashboard' && (
+                            
+                            {/* ÍNDICE / DASHBOARD */}
+                            {view === 'dashboard' && (
                                 <div className="space-y-6">
-                                    <h2 className="text-2xl font-bold text-slate-800">Resumen de tu Negocio</h2>
-                                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-                                        <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-100 flex items-center gap-4 border-l-4 border-l-indigo-500"><div className="p-3 bg-indigo-50 text-indigo-600 rounded-full"><i className="fa-solid fa-users text-2xl"></i></div><div><p className="text-sm text-slate-500 font-medium">Total Clientes</p><p className="text-2xl font-bold text-slate-800">{stats.clientsCount}</p></div></div>
-                                        <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-100 flex items-center gap-4 border-l-4 border-l-orange-500"><div className="p-3 bg-orange-50 text-orange-600 rounded-full"><i className="fa-solid fa-clock text-2xl"></i></div><div><p className="text-sm text-slate-500 font-medium">Órdenes Activas</p><p className="text-2xl font-bold text-slate-800">{stats.activeCount}</p></div></div>
-                                        <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-100 flex items-center gap-4 border-l-4 border-l-emerald-500"><div className="p-3 bg-emerald-50 text-emerald-600 rounded-full"><i className="fa-solid fa-circle-check text-2xl"></i></div><div><p className="text-sm text-slate-500 font-medium">Completadas</p><p className="text-2xl font-bold text-slate-800">{stats.completedCount}</p></div></div>
-                                        <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-100 flex items-center gap-4 border-l-4 border-l-red-500"><div className="p-3 bg-red-50 text-red-600 rounded-full"><i className="fa-solid fa-circle-xmark text-2xl"></i></div><div><p className="text-sm text-slate-500 font-medium">Canceladas</p><p className="text-2xl font-bold text-slate-800">{stats.cancelledCount}</p></div></div>
+                                    <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                                        <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-100 border-l-4 border-l-indigo-500"><p className="text-sm text-slate-500 font-medium">Clientes</p><p className="text-2xl font-bold">{stats.clientsCount}</p></div>
+                                        <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-100 border-l-4 border-l-orange-500"><p className="text-sm text-slate-500 font-medium">Pendientes</p><p className="text-2xl font-bold">{stats.activeCount}</p></div>
+                                        <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-100 border-l-4 border-l-emerald-500"><p className="text-sm text-slate-500 font-medium">Completados</p><p className="text-2xl font-bold">{stats.completedCount}</p></div>
+                                        <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-100 border-l-4 border-l-red-500"><p className="text-sm text-slate-500 font-medium">Cancelados</p><p className="text-2xl font-bold">{stats.cancelledCount}</p></div>
                                     </div>
 
-                                    <div className="mt-6">
-                                        <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-100">
-                                            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-4">
-                                                <h3 className="text-lg font-bold text-slate-700 flex items-center gap-2"><i className="fa-solid fa-clock text-orange-500 text-xl"></i> Órdenes Pendientes</h3>
-                                                <div className="flex gap-2 w-full sm:w-auto">
-                                                    <select value={dashboardClientFilter} onChange={(e) => setDashboardClientFilter(e.target.value)} className="w-full sm:w-auto p-2 rounded-lg border border-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500 text-sm font-medium text-slate-600 bg-slate-50">
-                                                        <option value="Todos">Todos los clientes</option>
-                                                        {clientsList.map(c => <option key={c.id} value={c.nombre}>{c.nombre}</option>)}
-                                                    </select>
-                                                    <select value={dashboardServiceFilter} onChange={(e) => setDashboardServiceFilter(e.target.value)} className="w-full sm:w-auto p-2 rounded-lg border border-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500 text-sm font-medium text-slate-600 bg-slate-50">
-                                                        <option value="Todos">Todos los servicios</option>
-                                                        <option value="Logística">Logística</option>
-                                                        <option value="Reingeniería">Reingeniería</option>
-                                                        <option value="Diseños">Diseños</option>
-                                                        <option value="Visitas Técnicas">Visitas Técnicas</option>
-                                                        <option value="Delivery">Delivery</option>
-                                                        <option value="Calidad">Calidad</option>
-                                                    </select>
+                                    {/* Gráfica Interactiva */}
+                                    <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-100">
+                                        <h3 className="text-lg font-bold text-slate-700 mb-4 flex items-center gap-2"><i className="fa-solid fa-chart-simple text-indigo-500"></i> Estado General del Negocio</h3>
+                                        <div className="h-64 relative">
+                                            <canvas id="dashboardChart"></canvas>
+                                        </div>
+                                    </div>
+
+                                    {/* Lista Rápida */}
+                                    <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-100">
+                                        <div className="flex justify-between items-center mb-4">
+                                            <h3 className="text-lg font-bold text-slate-700">Vista de Proyectos</h3>
+                                            <select value={dashboardServiceFilter} onChange={(e) => setDashboardServiceFilter(e.target.value)} className="p-2 border border-slate-200 rounded-lg text-sm bg-slate-50 text-slate-600 font-medium">
+                                                <option value="Todos">Todos los servicios</option>
+                                                <option value="Logística">Logística</option><option value="Reingeniería">Reingeniería</option><option value="Diseños">Diseños</option><option value="Visitas Técnicas">Visitas Técnicas</option><option value="Delivery">Delivery</option><option value="Calidad">Calidad</option><option value="Ingeniería">Ingeniería</option>
+                                            </select>
+                                        </div>
+                                        <div className="grid gap-4 md:grid-cols-2">
+                                            {orders.filter(o => o.estado === 'Pendiente' && (dashboardServiceFilter === 'Todos' || o.tipoServicio === dashboardServiceFilter)).map((o, idx) => (
+                                                <div key={o.id} className="p-4 border border-slate-100 rounded-xl bg-slate-50/50 hover:bg-slate-50 cursor-pointer" onClick={() => handleEditOrder(o)}>
+                                                    <span className="text-xs font-bold text-indigo-500 bg-indigo-50 px-2 py-0.5 rounded">N° {idx+1}</span>
+                                                    <h4 className="text-lg font-bold text-slate-800 mt-1">{o.servicio}</h4>
+                                                    <p className="text-sm text-slate-500">Cliente: <span className="font-semibold text-slate-700">{o.cliente}</span> {o.empresa && ` - ${o.empresa}`}</p>
+                                                    <div className="text-xs text-slate-400 mt-2 flex justify-between"><span>Tipo: {o.tipoServicio}</span> <span>Solicitud: {o.fechaSolicitud}</span></div>
                                                 </div>
-                                            </div>
-                                            <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-                                                {orders.filter(o => o.estado === 'Pendiente' && (dashboardClientFilter === 'Todos' || o.cliente === dashboardClientFilter) && (dashboardServiceFilter === 'Todos' || o.tipoServicio === dashboardServiceFilter)).length === 0 ? (
-                                                    <p className="text-slate-500 col-span-full py-4 text-center">No hay órdenes pendientes en este momento.</p>
-                                                ) : (
-                                                    orders.filter(o => o.estado === 'Pendiente' && (dashboardClientFilter === 'Todos' || o.cliente === dashboardClientFilter) && (dashboardServiceFilter === 'Todos' || o.tipoServicio === dashboardServiceFilter)).map(o => {
-                                                        const ultimoPago = o.depositos && o.depositos.length > 0 ? o.depositos[o.depositos.length - 1].fecha : 'Sin pagos';
-                                                        return (
-                                                            <div key={o.id} className="flex justify-between items-start p-4 hover:bg-slate-50 rounded-lg border border-orange-100 cursor-pointer shadow-sm transition-colors" onClick={() => handleEditOrder(o)}>
-                                                                <div>
-                                                                    <p className="font-bold text-sm text-slate-800">{o.cliente}</p>
-                                                                    {o.empresa && <p className="text-xs font-medium text-indigo-500 mb-1"><i className="fa-solid fa-building"></i> {o.empresa}</p>}
-                                                                    <p className="text-xs text-indigo-600 font-bold mt-1 bg-indigo-50 inline-block px-2 py-0.5 rounded"><i className="fa-solid fa-tag"></i> {o.tipoServicio || 'Diseños'}</p>
-                                                                    <p className="text-xs text-slate-500 mt-1 line-clamp-2">{o.servicio}</p>
-                                                                    <span className="text-xs text-slate-400 mt-2 flex items-center gap-1"><i className="fa-solid fa-calendar text-xs"></i> Solicitud: {o.fechaSolicitud || 'N/A'}</span>
-                                                                </div>
-                                                                <span className="text-xs px-2 py-1 rounded-full bg-orange-100 text-orange-700 font-medium whitespace-nowrap">Pendiente</span>
-                                                            </div>
-                                                        )
-                                                    })
-                                                )}
-                                            </div>
+                                            ))}
                                         </div>
                                     </div>
                                 </div>
                             )}
 
-                            {/* ÓRDENES */}
-                            {!loadingData && view === 'orders' && (
+                            {/* CALENDARIO */}
+                            {view === 'calendar' && (
+                                <div className="space-y-6">
+                                    <div className="flex flex-col sm:flex-row justify-between items-center gap-4 bg-white p-4 rounded-xl shadow-sm border border-slate-100">
+                                        <h2 className="text-xl font-bold text-slate-700 flex items-center gap-2"><i className="fa-solid fa-calendar-days text-indigo-500"></i> Calendario de Actividades</h2>
+                                        <div className="flex items-center gap-4">
+                                            <button onClick={prevMonth} className="p-2 bg-slate-100 text-slate-600 rounded-lg hover:bg-slate-200"><i className="fa-solid fa-chevron-left"></i></button>
+                                            <span className="font-bold text-slate-800 capitalize w-40 text-center">{calendarDate.toLocaleDateString('es-ES', { month: 'long', year: 'numeric' })}</span>
+                                            <button onClick={nextMonth} className="p-2 bg-slate-100 text-slate-600 rounded-lg hover:bg-slate-200"><i className="fa-solid fa-chevron-right"></i></button>
+                                        </div>
+                                    </div>
+                                    <div className="bg-white rounded-xl shadow-sm border border-slate-100 p-4">
+                                        <div className="grid grid-cols-7 gap-2 mb-2 text-center font-bold text-sm text-slate-500">
+                                            <div>Dom</div><div>Lun</div><div>Mar</div><div>Mié</div><div>Jue</div><div>Vie</div><div>Sáb</div>
+                                        </div>
+                                        <div className="grid grid-cols-7 gap-2">
+                                            {Array.from({ length: firstDayOfMonth }).map((_, i) => <div key={i} className="h-32 bg-slate-50 rounded-lg opacity-40"></div>)}
+                                            {calendarDays.map(({ day, dateStr, dayOrders, dayActivities }) => (
+                                                <div key={day} onClick={() => openActivityModal(dateStr)} className="h-32 overflow-y-auto bg-white rounded-lg border border-slate-200 p-1.5 relative group hover:border-emerald-400 transition-all cursor-pointer flex flex-col justify-between">
+                                                    <div className="flex justify-between items-center mb-1">
+                                                        <span className={`text-xs font-bold rounded-full w-5 h-5 flex items-center justify-center ${dateStr === new Date().toISOString().split('T')[0] ? 'bg-indigo-600 text-white' : 'text-slate-500'}`}>{day}</span>
+                                                        <i className="fa-solid fa-plus text-emerald-400 opacity-0 group-hover:opacity-100 text-[10px]"></i>
+                                                    </div>
+                                                    <div className="space-y-1 flex-1 overflow-y-auto">
+                                                        {dayActivities.map(a => (
+                                                            <div key={a.id} onClick={(e) => requestDelete(e, 'activity', a.id)} className="bg-emerald-50 border border-emerald-200 text-emerald-800 text-[9px] p-1 rounded leading-tight truncate hover:bg-red-50 hover:text-red-700" title={a.descripcion}>
+                                                                <span className="font-bold">{a.horas ? `${a.horas}h ` : ''}</span>{a.descripcion}
+                                                            </div>
+                                                        ))}
+                                                        {dayOrders.map(o => (
+                                                            <div key={o.id} onClick={(e) => { e.stopPropagation(); handleEditOrder(o); }} className="bg-indigo-50 border border-indigo-200 text-indigo-800 text-[9px] p-1 rounded leading-tight truncate font-semibold" title={`Proyecto: ${o.servicio}`}>
+                                                                <i className="fa-solid fa-user text-[8px] opacity-60 mr-0.5"></i>{o.cliente}
+                                                            </div>
+                                                        ))}
+                                                    </div>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </div>
+                                </div>
+                            )}
+
+                            {/* ÓRDENES (LISTA Y DETALLE) */}
+                            {view === 'orders' && (
                                 <div className="space-y-6">
                                     <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 bg-white p-4 rounded-xl shadow-sm border border-slate-100">
-                                        <h2 className="text-xl font-bold text-slate-700">Todas las Órdenes</h2>
-                                        <div className="flex flex-wrap sm:flex-nowrap gap-2 w-full sm:w-auto">
-                                            <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} className="p-2 rounded-lg border border-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500 text-sm font-medium text-slate-600 bg-slate-50">
-                                                <option value="Todos">Todos los estados</option><option value="Pendiente">🟡 Pendientes</option><option value="Completado">🟢 Completados</option><option value="Cancelado">🔴 Cancelados</option>
-                                            </select>
-                                            <select value={ordersClientFilter} onChange={(e) => setOrdersClientFilter(e.target.value)} className="p-2 rounded-lg border border-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500 text-sm font-medium text-slate-600 bg-slate-50">
-                                                <option value="Todos">Todos los clientes</option>
-                                                {clientsList.map(c => <option key={c.id} value={c.nombre}>{c.nombre}</option>)}
-                                            </select>
-                                            <div className="relative flex-1 sm:w-64">
-                                                <i className="fa-solid fa-magnifying-glass absolute left-3 top-3 text-slate-400 text-lg"></i>
-                                                <input type="text" placeholder="Buscar orden..." className="w-full pl-10 pr-4 py-2 rounded-lg border border-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500" value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} />
-                                            </div>
-                                            <button onClick={handleNewOrder} className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg flex items-center gap-2 transition-colors">
-                                                <i className="fa-solid fa-plus text-lg"></i> <span className="hidden sm:inline">Nueva Orden</span>
-                                            </button>
-                                        </div>
+                                        <h2 className="text-xl font-bold text-slate-700">Listado de Órdenes</h2>
+                                        <button onClick={handleNewOrder} className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg flex items-center gap-2 transition-colors font-semibold text-sm shadow-sm"><i className="fa-solid fa-plus"></i> Nueva Orden</button>
                                     </div>
-
-                                    <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-                                        {filteredOrders.map(order => {
+                                    <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
+                                        {filteredOrders.map((order, idx) => {
                                             const pendiente = order.costoTotal - order.adelanto;
-                                            const ultimoPago = order.depositos && order.depositos.length > 0 ? order.depositos[order.depositos.length - 1].fecha : 'Sin pagos';
                                             return (
-                                                <div key={order.id} className={`bg-white rounded-xl shadow-sm border-l-4 p-5 relative group ${order.estado === 'Pendiente' ? 'border-l-orange-400' : order.estado === 'Completado' ? 'border-l-emerald-400' : 'border-l-red-400'} border-t border-r border-b border-slate-100`}>
-                                                    <div className="absolute top-4 right-4 flex gap-2">
-                                                        <button onClick={() => handleEditOrder(order)} className="p-1.5 bg-slate-50 text-slate-600 rounded-md hover:bg-indigo-50 hover:text-indigo-600"><i className="fa-solid fa-pen"></i></button>
-                                                        <button onClick={(e) => requestDelete(e, 'order', order.id)} className="p-1.5 bg-slate-50 text-slate-600 rounded-md hover:bg-red-50 hover:text-red-600"><i className="fa-solid fa-trash"></i></button>
+                                                <div key={order.id} className={`bg-white rounded-2xl shadow-sm border-t-4 p-6 relative group ${order.estado === 'Pendiente' ? 'border-t-orange-400' : order.estado === 'Completado' ? 'border-t-emerald-400' : 'border-t-red-400'} border-x border-b border-slate-100`}>
+                                                    <div className="absolute top-4 right-4 flex gap-1.5 opacity-80 group-hover:opacity-100">
+                                                        <button onClick={() => handleEditOrder(order)} className="p-1.5 bg-slate-50 text-slate-600 rounded-md hover:bg-indigo-50 hover:text-indigo-600"><i className="fa-solid fa-pen text-xs"></i></button>
+                                                        <button onClick={(e) => requestDelete(e, 'order', order.id)} className="p-1.5 bg-slate-50 text-slate-600 rounded-md hover:bg-red-50 hover:text-red-600"><i className="fa-solid fa-trash text-xs"></i></button>
                                                     </div>
-                                                    <div className="mb-3">
-                                                        <span className="text-xs font-bold text-slate-400">{order.id}</span>
-                                                        <h3 className="font-bold text-lg mt-1 text-slate-800">{order.cliente}</h3>
-                                                        {order.empresa && <p className="text-xs font-medium text-indigo-500 mb-1"><i className="fa-solid fa-building"></i> {order.empresa}</p>}
-                                                        <p className="text-xs text-indigo-600 font-bold mb-1"><i className="fa-solid fa-tag"></i> {order.tipoServicio || 'Diseños'}</p>
-                                                        <p className="text-sm text-slate-500 line-clamp-1">{order.servicio}</p>
+                                                    <div className="mb-4">
+                                                        <span className="text-xs font-bold text-slate-400 uppercase tracking-wider block">N° {idx + 1} &bull; {order.id}</span>
+                                                        <h3 className="text-xl font-black text-slate-900 mt-1 uppercase tracking-tight leading-tight line-clamp-2" title={order.servicio}>{order.servicio}</h3>
+                                                        <p className="text-xs text-indigo-600 font-bold bg-indigo-50 inline-block px-2 py-0.5 rounded mt-2"><i className="fa-solid fa-tag"></i> {order.tipoServicio}</p>
                                                     </div>
-                                                    <div className="space-y-1 mb-3 text-sm text-slate-600 border-t border-slate-100 pt-3">
-                                                        <div className="flex justify-between"><span>Costo Total:</span><span>S/ {order.costoTotal.toFixed(2)}</span></div>
-                                                        <div className="flex justify-between"><span className="text-slate-400 text-xs">Adelanto ({order.depositos?.length || 0}):</span><span className="text-emerald-600">S/ {order.adelanto.toFixed(2)}</span></div>
-                                                        <div className="flex justify-between font-bold"><span>Pendiente:</span><span className={pendiente > 0 ? "text-orange-600" : "text-emerald-600"}>S/ {pendiente.toFixed(2)}</span></div>
-                                                    </div>
-                                                    <div className="flex justify-between items-center text-xs border-t border-slate-100 pt-3">
-                                                        <span className={`px-2 py-1 rounded-full font-medium ${order.estado === 'Pendiente' ? 'bg-orange-100 text-orange-700' : order.estado === 'Completado' ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-700'}`}>{order.estado}</span>
-                                                        <span className="text-slate-400"><i className="fa-solid fa-calendar text-xs"></i> {ultimoPago}</span>
+                                                    <div className="space-y-1.5 text-sm border-t border-slate-100 pt-3 text-slate-600">
+                                                        <div className="flex justify-between"><span>Cliente:</span><span className="font-semibold text-slate-800">{order.cliente}</span></div>
+                                                        {order.empresa && <div className="flex justify-between"><span>Empresa:</span><span className="font-medium text-slate-500">{order.empresa}</span></div>}
+                                                        {order.tipoServicio === 'Ingeniería' && (
+                                                            <div className="bg-slate-50 p-2 rounded-lg text-xs space-y-1 text-slate-500 border border-slate-100 my-2">
+                                                                <div className="flex justify-between"><span>Tiempo Solicitud:</span><span className="font-bold text-indigo-600">{order.tiempoSolicitud || 'N/A'}</span></div>
+                                                                <div className="flex justify-between"><span>Fecha Conclusión:</span><span className="font-bold text-slate-700">{order.fechaConclusion || 'N/A'}</span></div>
+                                                            </div>
+                                                        )}
+                                                        <div className="flex justify-between pt-1"><span>Costo Total:</span><span className="font-bold text-slate-800">S/ {order.costoTotal.toFixed(2)}</span></div>
+                                                        <div className="flex justify-between font-bold border-t border-dashed border-slate-100 pt-1.5"><span>Pendiente:</span><span className={pendiente > 0 ? "text-orange-600" : "text-emerald-600"}>S/ {pendiente.toFixed(2)}</span></div>
                                                     </div>
                                                 </div>
                                             );
@@ -780,49 +726,121 @@
                                 </div>
                             )}
 
+                            {/* REGISTRO / FORMULARIO DE ÓRDENES */}
+                            {view === 'form' && (
+                                <div className="bg-white rounded-xl shadow-lg border border-slate-100 overflow-hidden max-w-2xl mx-auto">
+                                    <div className="bg-slate-50 px-6 py-4 border-b border-slate-100 flex items-center justify-between">
+                                        <div className="flex items-center gap-3">
+                                            <button onClick={() => goTo('orders')} className="p-2 hover:bg-slate-200 rounded-full text-slate-500"><i className="fa-solid fa-arrow-left"></i></button>
+                                            <h2 className="text-xl font-bold text-slate-700">{editingId ? 'Editar Orden' : 'Nueva Orden'}</h2>
+                                        </div>
+                                    </div>
+                                    <form onSubmit={handleSaveOrder} className="p-6 space-y-5">
+                                        <div>
+                                            <label className="block text-xs font-medium text-slate-500 mb-1">Cliente *</label>
+                                            <select name="cliente" required value={formData.cliente} onChange={handleChangeOrder} className="w-full p-2.5 rounded-lg border border-slate-200 bg-white">
+                                                <option value="">Selecciona un cliente...</option>
+                                                {clientsList.map(c => <option key={c.id} value={c.nombre}>{c.nombre}</option>)}
+                                            </select>
+                                        </div>
+                                        {clientCompanies.length > 0 && (
+                                            <div>
+                                                <label className="block text-xs font-medium text-slate-500 mb-1">Empresa</label>
+                                                <select name="empresa" value={formData.empresa} onChange={handleChangeOrder} className="w-full p-2.5 rounded-lg border border-slate-200 bg-white">
+                                                    <option value="">Ninguna en específico</option>
+                                                    {clientCompanies.map((emp, i) => <option key={i} value={emp}>{emp}</option>)}
+                                                </select>
+                                            </div>
+                                        )}
+                                        <div className="grid grid-cols-2 gap-4">
+                                            <div>
+                                                <label className="block text-xs font-medium text-slate-500 mb-1">Tipo de Servicio *</label>
+                                                <select name="tipoServicio" required value={formData.tipoServicio} onChange={handleChangeOrder} className="w-full p-2.5 rounded-lg border border-slate-200 bg-white">
+                                                    <option value="Logística">Logística</option><option value="Reingeniería">Reingeniería</option><option value="Diseños">Diseños</option><option value="Visitas Técnicas">Visitas Técnicas</option><option value="Delivery">Delivery</option><option value="Calidad">Calidad</option><option value="Ingeniería">Ingeniería</option>
+                                                </select>
+                                            </div>
+                                            <div>
+                                                <label className="block text-xs font-medium text-slate-500 mb-1">Fecha de Solicitud *</label>
+                                                <input type="date" name="fechaSolicitud" required value={formData.fechaSolicitud} onChange={handleChangeOrder} className="w-full p-2.5 rounded-lg border border-slate-200 bg-white" />
+                                            </div>
+                                        </div>
+
+                                        {/* CAMPOS CONDICIONALES EXCLUSIVOS DE INGENIERÍA */}
+                                        {formData.tipoServicio === 'Ingeniería' && (
+                                            <div className="grid grid-cols-2 gap-4 bg-indigo-50/70 p-4 rounded-xl border border-indigo-100 animate-fadeIn">
+                                                <div>
+                                                    <label className="block text-xs font-bold text-indigo-700 mb-1">Tiempo de Solicitud</label>
+                                                    <input type="text" name="tiempoSolicitud" placeholder="Ej: 4 días / 12 horas" value={formData.tiempoSolicitud || ''} onChange={handleChangeOrder} className="w-full p-2 rounded-lg border border-indigo-200 bg-white text-sm outline-none focus:ring-2 focus:ring-indigo-400" />
+                                                </div>
+                                                <div>
+                                                    <label className="block text-xs font-bold text-indigo-700 mb-1">Fecha de Conclusión</label>
+                                                    <input type="date" name="fechaConclusion" value={formData.fechaConclusion || ''} onChange={handleChangeOrder} className="w-full p-2 rounded-lg border border-indigo-200 bg-white text-sm outline-none focus:ring-2 focus:ring-indigo-400" />
+                                                </div>
+                                            </div>
+                                        )}
+
+                                        <div>
+                                            <label className="block text-xs font-medium text-slate-500 mb-1">Actividad / Proyecto *</label>
+                                            <textarea name="servicio" required rows="2" value={formData.servicio} onChange={handleChangeOrder} className="w-full p-2.5 rounded-lg border border-slate-200 focus:ring-2 focus:ring-indigo-500" placeholder="Escribe el nombre principal de la actividad..."></textarea>
+                                        </div>
+                                        <div>
+                                            <label className="block text-xs font-medium text-slate-500 mb-1">Costo Total *</label>
+                                            <input type="number" step="0.01" name="costoTotal" required value={formData.costoTotal} onChange={handleChangeOrder} className="w-full p-2.5 rounded-lg border border-slate-200 font-bold" />
+                                        </div>
+
+                                        {/* Sección de pagos abreviada */}
+                                        <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 space-y-3">
+                                            <div className="flex justify-between items-center">
+                                                <label className="block text-xs font-bold text-slate-600 uppercase tracking-wider">Abonos y Adelantos</label>
+                                                <button type="button" onClick={handleAddDeposito} className="text-xs bg-indigo-100 text-indigo-700 px-3 py-1 rounded-md hover:bg-indigo-200 font-bold"><i className="fa-solid fa-plus"></i> Añadir Pago</button>
+                                            </div>
+                                            <div className="space-y-2">
+                                                {formData.depositos?.map((dep, idx) => (
+                                                    <div key={idx} className="flex gap-2 items-center bg-white p-2 rounded-lg border border-slate-200 shadow-sm">
+                                                        <input type="number" placeholder="Monto S/" value={dep.monto} onChange={e => handleDepositoChange(idx, 'monto', e.target.value)} className="w-1/2 p-1.5 text-sm rounded border border-slate-200 outline-none" />
+                                                        <input type="date" value={dep.fecha} onChange={e => handleDepositoChange(idx, 'fecha', e.target.value)} className="w-1/2 p-1.5 text-sm rounded border border-slate-200 outline-none" />
+                                                        <button type="button" onClick={() => handleRemoveDeposito(idx)} className="text-red-400 p-1 hover:bg-red-50 rounded"><i className="fa-solid fa-trash"></i></button>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        </div>
+
+                                        <div className="pt-4 border-t border-slate-100 flex justify-end gap-3">
+                                            <button type="button" onClick={() => goTo('orders')} className="px-6 py-2 rounded-lg border border-slate-200 text-slate-600">Cancelar</button>
+                                            <button type="submit" disabled={isSaving || clientsList.length === 0} className="px-6 py-2 rounded-lg bg-indigo-600 text-white font-medium hover:bg-indigo-700">
+                                                {isSaving ? 'Guardando...' : 'Guardar Proyecto'}
+                                            </button>
+                                        </div>
+                                    </form>
+                                </div>
+                            )}
+
                             {/* CLIENTES (LISTA) */}
-                            {!loadingData && view === 'clients' && (
+                            {view === 'clients' && (
                                 <div className="space-y-6">
                                     <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 bg-white p-4 rounded-xl shadow-sm border border-slate-100">
                                         <h2 className="text-xl font-bold text-slate-700">Directorio de Clientes</h2>
-                                        <div className="flex flex-wrap sm:flex-nowrap gap-2 w-full sm:w-auto">
-                                            <div className="relative flex-1 sm:w-64">
-                                                <i className="fa-solid fa-magnifying-glass absolute left-3 top-3 text-slate-400 text-lg"></i>
-                                                <input type="text" placeholder="Buscar cliente..." className="w-full pl-10 pr-4 py-2 rounded-lg border border-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500" value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} />
-                                            </div>
-                                            <button onClick={handleNewClient} className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg flex items-center gap-2 transition-colors">
-                                                <i className="fa-solid fa-plus text-lg"></i> <span className="hidden sm:inline">Nuevo Cliente</span>
-                                            </button>
-                                        </div>
+                                        <button onClick={handleNewClient} className="bg-indigo-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-indigo-700"><i className="fa-solid fa-plus"></i> Nuevo Cliente</button>
                                     </div>
                                     <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
                                         {filteredClients.map((client) => (
-                                            <div key={client.id} className="bg-white rounded-xl shadow-sm border border-slate-100 p-5 hover:border-indigo-200 transition-colors relative group">
-                                                <div className="absolute top-4 right-4 flex gap-2">
-                                                    <button onClick={() => handleEditClient(client)} className="p-1.5 bg-slate-50 text-slate-600 rounded-md hover:bg-indigo-50 hover:text-indigo-600"><i className="fa-solid fa-pen"></i></button>
-                                                    <button onClick={(e) => requestDelete(e, 'client', client.id)} className="p-1.5 bg-slate-50 text-slate-600 rounded-md hover:bg-red-50 hover:text-red-600"><i className="fa-solid fa-trash"></i></button>
+                                            <div key={client.id} className="bg-white rounded-xl shadow-sm border border-slate-100 p-5 hover:border-indigo-200 relative group">
+                                                <div className="absolute top-4 right-4 flex gap-1.5">
+                                                    <button onClick={() => handleEditClient(client)} className="p-1 bg-slate-50 text-slate-500 rounded hover:bg-indigo-50 hover:text-indigo-600"><i className="fa-solid fa-pen text-xs"></i></button>
+                                                    <button onClick={(e) => requestDelete(e, 'client', client.id)} className="p-1 bg-slate-50 text-slate-500 rounded hover:bg-red-50 hover:text-red-600"><i className="fa-solid fa-trash text-xs"></i></button>
                                                 </div>
-                                                <div className="flex items-start justify-between mb-4 pr-16">
-                                                    <div>
-                                                        <h3 className="font-bold text-lg text-slate-800">{client.nombre}</h3>
-                                                        <p className="text-sm text-slate-500"><i className="fa-solid fa-phone text-xs"></i> {client.telefono || 'Sin teléfono'}</p>
+                                                <h3 className="font-bold text-lg text-slate-800">{client.nombre}</h3>
+                                                <div className="my-3 space-y-1">
+                                                    <p className="text-xs font-bold text-slate-400 uppercase">Empresas:</p>
+                                                    <div className="flex flex-wrap gap-1">
+                                                        {client.empresas?.map((emp, i) => <span key={i} className="text-xs bg-slate-100 px-2 py-0.5 rounded border border-slate-200">{emp}</span>) || <span className="text-xs text-slate-400 italic">Ninguna</span>}
                                                     </div>
                                                 </div>
-                                                <div className="mb-4">
-                                                    <p className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-1">Empresas Asignadas:</p>
-                                                    {client.empresas && client.empresas.length > 0 ? (
-                                                        <div className="flex flex-wrap gap-1">
-                                                            {client.empresas.map((emp, i) => <span key={i} className="text-xs bg-slate-100 text-slate-600 px-2 py-1 rounded-md border border-slate-200"><i className="fa-solid fa-building mr-1"></i>{emp}</span>)}
-                                                        </div>
-                                                    ) : (<p className="text-xs text-slate-400 italic">No tiene empresas registradas</p>)}
+                                                <div className="text-sm bg-orange-50/60 p-3 rounded-xl flex justify-between items-center mb-4 border border-orange-100">
+                                                    <span className="text-orange-800 font-medium text-xs">Deuda total:</span>
+                                                    <span className="font-bold text-orange-600">S/ {client.saldoPendiente.toFixed(2)}</span>
                                                 </div>
-                                                <div className="space-y-2 text-sm mb-4 border-t border-slate-100 pt-3">
-                                                    <div className="flex justify-between text-slate-600"><span>Total Órdenes:</span> <span className="font-bold">{client.totalPedidos}</span></div>
-                                                    <div className="flex justify-between text-slate-600 bg-orange-50 p-2 rounded"><span className="text-orange-800">Saldo Pendiente:</span> <span className="font-bold text-orange-600">S/ {client.saldoPendiente.toFixed(2)}</span></div>
-                                                </div>
-                                                <button onClick={() => handlePrint(client)} className="w-full flex items-center justify-center gap-2 bg-slate-800 hover:bg-slate-700 text-white py-2 rounded-lg text-sm transition-colors">
-                                                    <i className="fa-solid fa-file-pdf"></i> Generar PDF Pendientes
-                                                </button>
+                                                <button onClick={() => handlePrint(client)} className="w-full bg-slate-800 text-white py-2 rounded-lg text-xs font-medium hover:bg-slate-700 flex justify-center items-center gap-1"><i className="fa-solid fa-file-pdf"></i> Estado de Cuenta (PDF)</button>
                                             </div>
                                         ))}
                                     </div>
@@ -830,109 +848,89 @@
                             )}
 
                             {/* CLIENTES (FORMULARIO) */}
-                            {!loadingData && view === 'client-form' && (
-                                <div className="bg-white rounded-xl shadow-lg border border-slate-100 overflow-hidden max-w-2xl mx-auto">
+                            {view === 'client-form' && (
+                                <div className="bg-white rounded-xl shadow-lg border border-slate-100 overflow-hidden max-w-lg mx-auto">
                                     <div className="bg-slate-50 px-6 py-4 border-b border-slate-100 flex items-center gap-3">
-                                        <button onClick={() => goTo('clients')} className="p-2 hover:bg-slate-200 rounded-full text-slate-500"><i className="fa-solid fa-arrow-left text-lg"></i></button>
+                                        <button onClick={() => goTo('clients')} className="p-2 hover:bg-slate-200 rounded-full text-slate-500"><i className="fa-solid fa-arrow-left"></i></button>
                                         <h2 className="text-xl font-bold text-slate-700">{editingId ? 'Editar Cliente' : 'Nuevo Cliente'}</h2>
                                     </div>
-                                    <form onSubmit={handleSaveClient} className="p-6 space-y-6">
-                                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                            <div>
-                                                <label className="block text-xs font-medium text-slate-500 mb-1">Nombre Completo *</label>
-                                                <input type="text" name="nombre" required className="w-full p-2.5 rounded-lg border border-slate-200 focus:ring-2 focus:ring-indigo-500" value={clientFormData.nombre} onChange={handleClientChange} />
-                                            </div>
-                                            <div>
-                                                <label className="block text-xs font-medium text-slate-500 mb-1">Teléfono</label>
-                                                <input type="tel" name="telefono" className="w-full p-2.5 rounded-lg border border-slate-200 focus:ring-2 focus:ring-indigo-500" value={clientFormData.telefono} onChange={handleClientChange} />
-                                            </div>
+                                    <form onSubmit={handleSaveClient} className="p-6 space-y-5">
+                                        <div>
+                                            <label className="block text-xs font-medium text-slate-500 mb-1">Nombre Completo *</label>
+                                            <input type="text" name="nombre" required className="w-full p-2.5 rounded-lg border border-slate-200" value={clientFormData.nombre} onChange={handleClientChange} />
                                         </div>
-                                        <div className="bg-slate-50 p-4 rounded-xl border border-slate-200">
-                                            <div className="flex justify-between items-center mb-3">
-                                                <label className="block text-xs font-bold text-slate-600 uppercase tracking-wider flex items-center gap-1"><i className="fa-solid fa-building text-sm"></i> Empresas del Cliente</label>
-                                                <button type="button" onClick={handleAddEmpresa} className="text-xs bg-indigo-100 text-indigo-700 px-3 py-1.5 rounded-md hover:bg-indigo-200 flex items-center gap-1 font-bold transition-colors">
-                                                    <i className="fa-solid fa-plus text-sm"></i> Añadir Empresa
-                                                </button>
+                                        <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 space-y-3">
+                                            <div className="flex justify-between items-center">
+                                                <label className="block text-xs font-bold text-slate-600 uppercase tracking-wider">Empresas Vinculadas</label>
+                                                <button type="button" onClick={handleAddEmpresa} className="text-xs bg-indigo-100 text-indigo-700 px-3 py-1 rounded-md hover:bg-indigo-200 font-bold"><i className="fa-solid fa-plus"></i> Añadir</button>
                                             </div>
-                                            <div className="space-y-2">
-                                                {clientFormData.empresas.map((emp, idx) => (
-                                                    <div key={idx} className="flex gap-2 items-center">
-                                                        <input type="text" value={emp} onChange={(e) => handleEmpresaChange(idx, e.target.value)} placeholder={`Nombre de la Empresa ${idx + 1}`} className="w-full p-2 text-sm rounded-lg border border-slate-200 focus:ring-2 focus:ring-indigo-500 outline-none" />
-                                                        <button type="button" onClick={() => handleRemoveEmpresa(idx)} className="text-red-400 p-2 hover:bg-red-50 hover:text-red-600 rounded-md transition-colors"><i className="fa-solid fa-trash"></i></button>
-                                                    </div>
-                                                ))}
-                                            </div>
+                                            {clientFormData.empresas.map((emp, idx) => (
+                                                <div key={idx} className="flex gap-2 items-center">
+                                                    <input type="text" value={emp} onChange={(e) => handleEmpresaChange(idx, e.target.value)} placeholder="Nombre comercial / Empresa" className="w-full p-2 text-sm rounded-lg border border-slate-200 bg-white" />
+                                                    <button type="button" onClick={() => handleRemoveEmpresa(idx)} className="text-red-400 p-2 hover:bg-red-50 rounded"><i className="fa-solid fa-trash"></i></button>
+                                                </div>
+                                            ))}
                                         </div>
                                         <div className="pt-4 border-t border-slate-100 flex justify-end gap-3">
-                                            <button type="button" onClick={() => goTo('clients')} className="px-6 py-2.5 rounded-lg border border-slate-200 text-slate-600 font-medium hover:bg-slate-50">Cancelar</button>
-                                            <button type="submit" className="px-6 py-2.5 rounded-lg bg-indigo-600 text-white font-medium hover:bg-indigo-700 flex items-center gap-2"><i className="fa-solid fa-floppy-disk text-lg"></i> Guardar Cliente</button>
+                                            <button type="button" onClick={() => goTo('clients')} className="px-6 py-2 rounded-lg border border-slate-200 text-slate-600">Cancelar</button>
+                                            <button type="submit" className="px-6 py-2 rounded-lg bg-indigo-600 text-white">Guardar</button>
                                         </div>
                                     </form>
                                 </div>
                             )}
 
                             {/* FINANZAS */}
-                            {!loadingData && view === 'finances' && (
+                            {view === 'finances' && (
                                 <div className="space-y-6">
                                     <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 bg-white p-4 rounded-xl shadow-sm border border-slate-100">
-                                        <h2 className="text-xl font-bold text-slate-700 flex items-center gap-2"><i className="fa-solid fa-chart-pie text-indigo-500 text-2xl"></i> Finanzas y Cobranzas</h2>
+                                        <h2 className="text-xl font-bold text-slate-700 flex items-center gap-2"><i className="fa-solid fa-chart-pie text-indigo-500"></i> Finanzas</h2>
                                         <div className="flex gap-2 w-full sm:w-auto">
-                                            <div className="relative flex-1 sm:w-64">
-                                                <i className="fa-solid fa-filter absolute left-3 top-3 text-slate-400"></i>
-                                                <select value={financeClientFilter} onChange={(e) => setFinanceClientFilter(e.target.value)} className="w-full pl-10 pr-4 py-2 rounded-lg border border-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500 appearance-none bg-white text-sm">
-                                                    <option value="Todos">Todos los clientes y empresas</option>
-                                                    {financeFilterOptions.map(c => <option key={c} value={c}>{c}</option>)}
-                                                </select>
-                                            </div>
-                                            <button onClick={() => setShowFinances(!showFinances)} className="bg-slate-100 hover:bg-slate-200 text-slate-600 px-4 py-2 rounded-lg flex items-center gap-2 transition-colors border border-slate-200" title="Mostrar/Ocultar importes">
-                                                {showFinances ? <i className="fa-solid fa-eye-slash text-lg"></i> : <i className="fa-solid fa-eye text-lg"></i>}
-                                            </button>
-                                            <button onClick={() => handlePrintFinance('all')} className="bg-slate-800 hover:bg-slate-700 text-white px-4 py-2 rounded-lg flex items-center gap-2 transition-colors shadow-sm text-sm font-medium">
-                                                <i className="fa-solid fa-file-pdf"></i> <span className="hidden sm:inline">PDF Total</span>
-                                            </button>
-                                            <button onClick={() => handlePrintFinance('pending')} className="bg-orange-600 hover:bg-orange-700 text-white px-4 py-2 rounded-lg flex items-center gap-2 transition-colors shadow-sm text-sm font-medium">
-                                                <i className="fa-solid fa-file-pdf"></i> <span className="hidden sm:inline">PDF Deudas</span>
-                                            </button>
+                                            <select value={financeClientFilter} onChange={(e) => setFinanceClientFilter(e.target.value)} className="p-2 rounded-lg border border-slate-200 bg-white text-sm">
+                                                <option value="Todos">Todos los clientes y empresas</option>
+                                                {financeFilterOptions.map(c => <option key={c} value={c}>{c}</option>)}
+                                            </select>
+                                            <button onClick={() => handlePrintFinance('all')} className="bg-slate-800 hover:bg-slate-700 text-white px-3 py-2 rounded-lg flex items-center gap-1 text-xs font-medium shadow-sm"><i className="fa-solid fa-file-pdf"></i> PDF Total</button>
+                                            <button onClick={() => handlePrintFinance('pending')} className="bg-orange-600 hover:bg-orange-700 text-white px-3 py-2 rounded-lg flex items-center gap-1 text-xs font-medium shadow-sm"><i className="fa-solid fa-file-pdf"></i> PDF Deudas</button>
                                         </div>
                                     </div>
                                     <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                                        <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-100">
-                                            <h3 className="text-slate-500 font-medium mb-1">Total Facturado {financeClientFilter !== 'Todos' && `(${financeClientFilter})`}</h3>
-                                            <p className={`text-4xl font-bold text-slate-800 ${showFinances ? '' : 'blur-md select-none transition-all'}`}>
-                                                S/ {orders.filter(o => o.estado !== 'Cancelado').filter(isFinanceMatch).reduce((sum, o) => sum + o.costoTotal, 0).toFixed(2)}
-                                            </p>
-                                        </div>
-                                        <div className="bg-orange-50 p-6 rounded-xl shadow-sm border border-orange-100">
-                                            <h3 className="text-orange-800 font-medium mb-1">Total Pendiente {financeClientFilter !== 'Todos' && `(${financeClientFilter})`}</h3>
-                                            <p className={`text-4xl font-bold text-orange-600 ${showFinances ? '' : 'blur-md select-none transition-all'}`}>
-                                                S/ {orders.filter(o => o.estado === 'Pendiente').filter(isFinanceMatch).reduce((sum, o) => sum + (o.costoTotal - o.adelanto), 0).toFixed(2)}
-                                            </p>
-                                        </div>
+                                        <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-100"><h3 className="text-slate-500 font-medium mb-1">Facturado</h3><p className="text-3xl font-bold text-slate-800">S/ {orders.filter(o => o.estado !== 'Cancelado').filter(isFinanceMatch).reduce((sum, o) => sum + o.costoTotal, 0).toFixed(2)}</p></div>
+                                        <div className="bg-orange-50 p-6 rounded-xl shadow-sm border border-orange-100"><h3 className="text-orange-800 font-medium mb-1">Pendiente de Cobro</h3><p className="text-3xl font-bold text-orange-600">S/ {orders.filter(o => o.estado === 'Pendiente').filter(isFinanceMatch).reduce((sum, o) => sum + (o.costoTotal - o.adelanto), 0).toFixed(2)}</p></div>
+                                    </div>
+                                </div>
+                            )}
+
+                            {/* CONTROL DE INGRESOS MENSUALES */}
+                            {view === 'income' && (
+                                <div className="space-y-6">
+                                    <div className="flex flex-col sm:flex-row justify-between items-center gap-4 bg-white p-4 rounded-xl shadow-sm border border-slate-100">
+                                        <h2 className="text-xl font-bold text-slate-700 flex items-center gap-2"><i className="fa-solid fa-money-bill-wave text-emerald-500"></i> Historial Mensual</h2>
+                                        <input type="month" value={incomeMonth} onChange={(e) => setIncomeMonth(e.target.value)} className="p-2 rounded-lg border border-slate-200 font-bold text-slate-700 text-sm" />
+                                    </div>
+                                    <div className="bg-gradient-to-r from-emerald-500 to-teal-500 rounded-xl shadow-md p-6 text-white text-center">
+                                        <h3 className="text-emerald-100 text-sm mb-1">Recaudado Neto del Mes</h3>
+                                        <p className="text-4xl font-black">S/ {depositsData.monthlyTotal.toFixed(2)}</p>
                                     </div>
                                     <div className="bg-white rounded-xl shadow-sm border border-slate-100 overflow-hidden">
-                                        <div className="p-4 bg-slate-50 border-b border-slate-100"><h3 className="font-bold text-slate-700">Desglose de Órdenes {financeClientFilter !== 'Todos' && `- ${financeClientFilter}`}</h3></div>
                                         <div className="overflow-x-auto">
-                                            <table className="w-full text-left border-collapse min-w-[600px]">
+                                            <table className="w-full text-left border-collapse">
                                                 <thead>
-                                                    <tr className="bg-white text-slate-500 text-sm border-b border-slate-100">
-                                                        <th className="p-4 font-medium">Cliente</th><th className="p-4 font-medium">Actividad</th><th className="p-4 font-medium text-right">Costo Total</th>
-                                                        <th className="p-4 font-medium text-right">Abonado</th><th className="p-4 font-medium text-right">Pendiente</th><th className="p-4 font-medium text-center">Estado</th>
+                                                    <tr className="bg-slate-50 text-slate-500 text-xs uppercase tracking-wider border-b border-slate-100">
+                                                        <th className="p-4 font-bold">Fecha</th><th className="p-4 font-bold">Monto</th><th className="p-4 font-bold">Cliente</th><th className="p-4 font-bold">Actividad Destinada</th>
                                                     </tr>
                                                 </thead>
                                                 <tbody>
-                                                    {orders.filter(isFinanceMatch).map(o => {
-                                                        const pendiente = o.costoTotal - o.adelanto;
-                                                        return (
-                                                            <tr key={o.id} className="border-b border-slate-50 hover:bg-slate-50 transition-colors">
-                                                                <td className="p-4 text-sm text-slate-800 font-medium">{o.cliente}</td>
-                                                                <td className="p-4 text-sm text-slate-600"><span className="font-medium text-slate-800 line-clamp-1">{o.servicio}</span>{o.empresa && <span className="text-xs text-indigo-500 mt-1 block"><i className="fa-solid fa-building"></i> {o.empresa}</span>}</td>
-                                                                <td className={`p-4 text-sm text-right ${showFinances ? 'text-slate-600' : 'blur-sm select-none'}`}>S/ {o.costoTotal.toFixed(2)}</td>
-                                                                <td className={`p-4 text-sm text-right ${showFinances ? 'text-emerald-600' : 'blur-sm select-none'}`}>S/ {o.adelanto.toFixed(2)}</td>
-                                                                <td className={`p-4 text-sm text-right font-bold ${showFinances ? (pendiente > 0 ? 'text-orange-600' : 'text-slate-400') : 'blur-sm select-none'}`}>S/ {pendiente.toFixed(2)}</td>
-                                                                <td className="p-4 text-center"><span className={`text-xs px-2 py-1 rounded-full ${o.estado === 'Pendiente' ? 'bg-orange-100 text-orange-700' : o.estado === 'Completado' ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-700'}`}>{o.estado}</span></td>
-                                                            </tr>
-                                                        );
-                                                    })}
+                                                    {depositsData.all.filter(d => d.isCurrentMonth).map((dep, idx) => (
+                                                        <tr key={idx} className="border-b border-slate-50 hover:bg-slate-50/80 transition-colors">
+                                                            <td className="p-4 text-sm text-slate-600 font-medium">{dep.fecha}</td>
+                                                            <td className="p-4 text-sm font-bold text-emerald-600">S/ {parseFloat(dep.monto).toFixed(2)}</td>
+                                                            <td className="p-4 text-sm text-slate-800 font-semibold">{dep.cliente}</td>
+                                                            <td className="p-4 text-sm text-slate-600 max-w-xs truncate">{dep.actividad}</td>
+                                                        </tr>
+                                                    ))}
+                                                    {depositsData.all.filter(d => d.isCurrentMonth).length === 0 && (
+                                                        <tr><td colSpan="4" className="p-8 text-center text-slate-400 italic">No hay abonos registrados para este mes.</td></tr>
+                                                    )}
                                                 </tbody>
                                             </table>
                                         </div>
@@ -940,255 +938,6 @@
                                 </div>
                             )}
 
-                            {/* FORMULARIO DE ÓRDENES */}
-                            {!loadingData && view === 'form' && (
-                                <div className="bg-white rounded-xl shadow-lg border border-slate-100 overflow-hidden max-w-4xl mx-auto">
-                                    <div className="bg-slate-50 px-6 py-4 border-b border-slate-100 flex items-center justify-between">
-                                        <div className="flex items-center gap-3">
-                                            <button onClick={() => goTo('orders')} className="p-2 hover:bg-slate-200 rounded-full text-slate-500"><i className="fa-solid fa-arrow-left text-lg"></i></button>
-                                            <h2 className="text-xl font-bold text-slate-700">{editingId ? 'Editar Orden' : 'Nueva Orden'}</h2>
-                                        </div>
-                                        {editingId && (
-                                            <select name="estado" value={formData.estado} onChange={handleChangeOrder} className="bg-white border border-slate-200 rounded-md py-1 px-3 text-sm font-bold text-slate-700 focus:outline-none focus:ring-2 focus:ring-indigo-500">
-                                                <option value="Pendiente">🟡 Pendiente</option><option value="Completado">🟢 Completado</option><option value="Cancelado">🔴 Cancelado</option>
-                                            </select>
-                                        )}
-                                    </div>
-                                    <form onSubmit={handleSaveOrder} className="p-6">
-                                        <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-                                            <div className="space-y-6">
-                                                <div className="space-y-4">
-                                                    <h3 className="text-sm font-bold text-indigo-500 uppercase tracking-wider flex items-center gap-2"><i className="fa-solid fa-user"></i> Datos del Cliente</h3>
-                                                    {clientsList.length === 0 ? (
-                                                        <div className="bg-orange-50 text-orange-800 p-3 rounded-lg text-sm border border-orange-200 flex flex-col items-center">
-                                                            <p className="mb-2 text-center">Para crear una orden, primero debes registrar un cliente.</p>
-                                                            <button type="button" onClick={handleNewClient} className="bg-orange-500 text-white px-4 py-1.5 rounded-md hover:bg-orange-600 transition-colors text-xs font-bold">Ir a Nuevo Cliente</button>
-                                                        </div>
-                                                    ) : (
-                                                        <>
-                                                            <div>
-                                                                <label className="block text-xs font-medium text-slate-500 mb-1">Seleccionar Cliente *</label>
-                                                                <select name="cliente" required value={formData.cliente} onChange={handleChangeOrder} className="w-full p-2.5 rounded-lg border border-slate-200 focus:ring-2 focus:ring-indigo-500 bg-white">
-                                                                    <option value="">Selecciona un cliente...</option>
-                                                                    {clientsList.map(c => <option key={c.id} value={c.nombre}>{c.nombre}</option>)}
-                                                                </select>
-                                                            </div>
-                                                            {clientCompanies.length > 0 && (
-                                                                <div className="bg-indigo-50 p-3 rounded-lg border border-indigo-100">
-                                                                    <label className="block text-xs font-bold text-indigo-700 mb-1"><i className="fa-solid fa-building"></i> Empresa (Opcional)</label>
-                                                                    <select name="empresa" value={formData.empresa} onChange={handleChangeOrder} className="w-full p-2 rounded-md border border-indigo-200 focus:ring-2 focus:ring-indigo-500 bg-white text-sm">
-                                                                        <option value="">Ninguna en específico</option>
-                                                                        {clientCompanies.map((emp, i) => <option key={i} value={emp}>{emp}</option>)}
-                                                                    </select>
-                                                                </div>
-                                                            )}
-                                                            <div>
-                                                                <label className="block text-xs font-medium text-slate-500 mb-1">Teléfono</label>
-                                                                <input type="tel" name="telefono" className="w-full p-2.5 rounded-lg border border-slate-200 bg-slate-50" value={formData.telefono} readOnly placeholder="Autocompletado al seleccionar cliente..." />
-                                                            </div>
-                                                        </>
-                                                    )}
-                                                </div>
-                                                <div className="space-y-4 pt-4 border-t border-slate-100">
-                                                    <h3 className="text-sm font-bold text-indigo-500 uppercase tracking-wider flex items-center gap-2"><i className="fa-solid fa-file-lines"></i> Servicio</h3>
-                                                    <div className="grid grid-cols-2 gap-4">
-                                                        <div>
-                                                            <label className="block text-xs font-medium text-slate-500 mb-1">Tipo de Servicio *</label>
-                                                            <select name="tipoServicio" required value={formData.tipoServicio || 'Diseños'} onChange={handleChangeOrder} className="w-full p-2.5 rounded-lg border border-slate-200 focus:ring-2 focus:ring-indigo-500 bg-white">
-                                                                <option value="Logística">Logística</option>
-                                                                <option value="Reingeniería">Reingeniería</option>
-                                                                <option value="Diseños">Diseños</option>
-                                                                <option value="Visitas Técnicas">Visitas Técnicas</option>
-                                                                <option value="Delivery">Delivery</option>
-                                                                <option value="Calidad">Calidad</option>
-                                                            </select>
-                                                        </div>
-                                                        <div>
-                                                            <label className="block text-xs font-medium text-slate-500 mb-1">Fecha de Solicitud *</label>
-                                                            <input type="date" name="fechaSolicitud" required value={formData.fechaSolicitud || ''} onChange={handleChangeOrder} className="w-full p-2.5 rounded-lg border border-slate-200 focus:ring-2 focus:ring-indigo-500 bg-white" />
-                                                        </div>
-                                                    </div>
-                                                    <div>
-                                                        <label className="block text-xs font-medium text-slate-500 mb-1">Actividad *</label>
-                                                        <textarea name="servicio" required rows="2" className="w-full p-2.5 rounded-lg border border-slate-200 focus:ring-2 focus:ring-indigo-500" value={formData.servicio} onChange={handleChangeOrder}></textarea>
-                                                    </div>
-                                                    <div>
-                                                        <label className="block text-xs font-medium text-slate-500 mb-1">Extras / Detalles</label>
-                                                        <textarea name="extras" rows="2" className="w-full p-2.5 rounded-lg border border-slate-200 focus:ring-2 focus:ring-indigo-500" value={formData.extras} onChange={handleChangeOrder}></textarea>
-                                                    </div>
-                                                </div>
-                                            </div>
-
-                                            <div className="space-y-6">
-                                                <div className="space-y-4">
-                                                    <h3 className="text-sm font-bold text-indigo-500 uppercase tracking-wider flex items-center gap-2"><i className="fa-solid fa-dollar-sign"></i> Finanzas</h3>
-                                                    <div>
-                                                        <label className="block text-xs font-medium text-slate-500 mb-1">Costo Total del Proyecto *</label>
-                                                        <div className="relative">
-                                                            <span className="absolute left-3 top-2.5 text-slate-400 font-bold">S/</span>
-                                                            <input type="number" name="costoTotal" required min="0" step="0.01" className="w-full pl-8 pr-2.5 py-2.5 rounded-lg border border-slate-200 focus:ring-2 focus:ring-indigo-500 font-bold text-slate-700" value={formData.costoTotal} onChange={handleChangeOrder} />
-                                                        </div>
-                                                    </div>
-                                                    <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 space-y-3 mt-4">
-                                                        <div className="flex justify-between items-center">
-                                                            <label className="block text-xs font-bold text-slate-600 uppercase tracking-wider flex items-center gap-1"><i className="fa-solid fa-credit-card text-sm"></i> Pagos / Adelantos</label>
-                                                            <button type="button" onClick={handleAddDeposito} className="text-xs bg-indigo-100 text-indigo-700 px-3 py-1.5 rounded-md hover:bg-indigo-200 flex items-center gap-1 font-bold transition-colors">
-                                                                <i className="fa-solid fa-plus text-sm"></i> Añadir
-                                                            </button>
-                                                        </div>
-                                                        <div className="space-y-2 max-h-40 overflow-y-auto pr-1">
-                                                            {formData.depositos?.map((dep, idx) => (
-                                                                <div key={idx} className="flex gap-2 items-center bg-white p-2 rounded-lg border border-slate-200 shadow-sm">
-                                                                    <div className="relative flex-1">
-                                                                        <span className="absolute left-3 top-1.5 text-slate-400 font-bold">S/</span>
-                                                                        <input type="number" value={dep.monto} onChange={e => handleDepositoChange(idx, 'monto', e.target.value)} placeholder="Monto" className="w-full pl-8 pr-3 py-1.5 text-sm rounded-md border border-slate-200 focus:ring-2 focus:ring-indigo-500 outline-none" />
-                                                                    </div>
-                                                                    <input type="date" value={dep.fecha} onChange={e => handleDepositoChange(idx, 'fecha', e.target.value)} className="flex-1 px-3 py-1.5 text-sm rounded-md border border-slate-200 focus:ring-2 focus:ring-indigo-500 outline-none" />
-                                                                    <button type="button" onClick={() => handleRemoveDeposito(idx)} className="text-red-400 p-1.5 hover:bg-red-50 hover:text-red-600 rounded-md transition-colors"><i className="fa-solid fa-trash"></i></button>
-                                                                </div>
-                                                            ))}
-                                                            {(!formData.depositos || formData.depositos.length === 0) && (<p className="text-xs text-slate-400 italic text-center py-4 bg-white border border-dashed border-slate-200 rounded-lg">Aún no se han registrado pagos.</p>)}
-                                                        </div>
-                                                        <div className="flex justify-between items-center pt-2 border-t border-slate-200">
-                                                            <span className="text-xs font-medium text-slate-500">Total Abonado:</span><span className="text-sm font-bold text-emerald-600">S/ {formTotalAdelanto.toFixed(2)}</span>
-                                                        </div>
-                                                    </div>
-                                                    <div className="bg-slate-800 text-white p-4 rounded-lg mt-2 flex justify-between items-center shadow-inner">
-                                                        <span className="text-sm font-medium opacity-80">Saldo Pendiente:</span>
-                                                        <span className="text-2xl font-bold">S/ {((parseFloat(formData.costoTotal) || 0) - formTotalAdelanto).toFixed(2)}</span>
-                                                    </div>
-                                                </div>
-                                                <div className="space-y-4 pt-4 border-t border-slate-100">
-                                                    <h3 className="text-sm font-bold text-indigo-500 uppercase tracking-wider flex items-center gap-2"><i className="fa-solid fa-image"></i> Imágenes</h3>
-                                                    <label className="border-2 border-dashed border-slate-300 rounded-lg p-6 flex flex-col items-center justify-center text-slate-500 hover:bg-slate-50 hover:border-indigo-400 transition-colors cursor-pointer">
-                                                        <i className="fa-solid fa-image text-2xl mb-2"></i><span className="text-sm font-medium">Haz clic para subir imágenes</span>
-                                                        <input type="file" multiple accept="image/*" className="hidden" onChange={handleImageUpload} />
-                                                    </label>
-                                                    {formData.imagenes && formData.imagenes.length > 0 && (
-                                                        <div className="grid grid-cols-3 gap-2 mt-4">
-                                                            {formData.imagenes.map((img, idx) => (
-                                                                <div key={idx} className="relative group rounded-md overflow-hidden border border-slate-200 aspect-square">
-                                                                    <img src={img} alt={`Ref ${idx}`} className="w-full h-full object-cover" />
-                                                                    <button type="button" onClick={() => removeImage(idx)} className="absolute top-1 right-1 bg-red-500 text-white rounded-full p-1 opacity-0 group-hover:opacity-100 transition-opacity"><i className="fa-solid fa-xmark text-xs"></i></button>
-                                                                </div>
-                                                            ))}
-                                                        </div>
-                                                    )}
-                                                </div>
-                                            </div>
-                                        </div>
-                                        <div className="pt-6 mt-8 border-t border-slate-100 flex justify-end gap-3">
-                                            <button type="button" onClick={() => goTo('orders')} className="px-6 py-2.5 rounded-lg border border-slate-200 text-slate-600 font-medium hover:bg-slate-50">Cancelar</button>
-                                            <button type="submit" disabled={isSaving || clientsList.length === 0} className={`px-6 py-2.5 rounded-lg text-white font-medium flex items-center gap-2 ${(isSaving || clientsList.length === 0) ? 'bg-slate-400 cursor-not-allowed' : 'bg-indigo-600 hover:bg-indigo-700'}`}>
-                                                <i className={`fa-solid ${isSaving ? 'fa-spinner fa-spin' : 'fa-floppy-disk'} text-lg`}></i> {isSaving ? 'Guardando...' : 'Guardar Orden'}
-                                            </button>
-                                        </div>
-                                    </form>
-                                </div>
-                            )}
-
-                            {/* CALENDARIO */}
-                            {!loadingData && view === 'calendar' && (
-                                <div className="space-y-6">
-                                    <div className="flex flex-col sm:flex-row justify-between items-center gap-4 bg-white p-4 rounded-xl shadow-sm border border-slate-100">
-                                        <h2 className="text-xl font-bold text-slate-700 flex items-center gap-2"><i className="fa-solid fa-calendar-days text-indigo-500"></i> Calendario de Actividades</h2>
-                                        <div className="flex items-center gap-4">
-                                            <button onClick={prevMonth} className="p-2 bg-slate-100 text-slate-600 rounded-lg hover:bg-slate-200"><i className="fa-solid fa-chevron-left"></i></button>
-                                            <span className="font-bold text-slate-800 capitalize w-40 text-center">
-                                                {calendarDate.toLocaleDateString('es-ES', { month: 'long', year: 'numeric' })}
-                                            </span>
-                                            <button onClick={nextMonth} className="p-2 bg-slate-100 text-slate-600 rounded-lg hover:bg-slate-200"><i className="fa-solid fa-chevron-right"></i></button>
-                                        </div>
-                                    </div>
-
-                                    <div className="bg-white rounded-xl shadow-sm border border-slate-100 p-4">
-                                        <div className="grid grid-cols-7 gap-2 mb-2 text-center font-bold text-sm text-slate-500">
-                                            <div>Dom</div><div>Lun</div><div>Mar</div><div>Mié</div><div>Jue</div><div>Vie</div><div>Sáb</div>
-                                        </div>
-                                        <div className="grid grid-cols-7 gap-2">
-                                            {Array.from({ length: firstDayOfMonth }).map((_, i) => (
-                                                <div key={`empty-${i}`} className="h-32 bg-slate-50 rounded-lg border border-dashed border-slate-200 opacity-50"></div>
-                                            ))}
-                                            {calendarDays.map(({ day, dateStr, dayOrders, dayActivities }) => (
-                                                <div key={day} onClick={() => openActivityModal(dateStr)} className="h-32 overflow-y-auto bg-white rounded-lg border border-slate-200 p-2 relative group hover:border-emerald-300 hover:shadow-md cursor-pointer transition-all">
-                                                    <div className="flex justify-between items-start mb-1">
-                                                        <span className={`text-xs font-bold rounded-full w-6 h-6 flex items-center justify-center ${dateStr === new Date().toISOString().split('T')[0] ? 'bg-indigo-600 text-white' : 'text-slate-500'}`}>{day}</span>
-                                                        <i className="fa-solid fa-plus text-emerald-400 opacity-0 group-hover:opacity-100 transition-opacity text-xs"></i>
-                                                    </div>
-                                                    <div className="space-y-1">
-                                                        {/* Renderizamos las actividades personalizadas (Verdes) */}
-                                                        {dayActivities.map(a => (
-                                                            <div key={a.id} onClick={(e) => requestDelete(e, 'activity', a.id)} className="bg-emerald-50 border border-emerald-200 text-emerald-800 text-[10px] leading-tight p-1.5 rounded font-medium truncate hover:bg-red-100 hover:text-red-800 hover:border-red-300 transition-colors" title={`Actividad: ${a.descripcion}`}>
-                                                                <span className="font-bold mr-1">{a.horas ? `${a.horas}h` : ''}</span>
-                                                                {a.descripcion}
-                                                            </div>
-                                                        ))}
-                                                        {/* Renderizamos las órdenes creadas en este día (Azules) */}
-                                                        {dayOrders.map(o => (
-                                                            <div key={o.id} onClick={(e) => { e.stopPropagation(); handleEditOrder(o); }} className="bg-indigo-50 border border-indigo-200 text-indigo-800 text-[10px] leading-tight p-1.5 rounded font-medium truncate hover:bg-indigo-100 transition-colors" title={`Orden de ${o.cliente}: ${o.servicio}`}>
-                                                                <i className="fa-solid fa-box mr-1 opacity-70"></i>{o.cliente}
-                                                            </div>
-                                                        ))}
-                                                    </div>
-                                                </div>
-                                            ))}
-                                        </div>
-                                    </div>
-                                </div>
-                            )}
-
-                            {/* INGRESOS MENSUALES */}
-                            {!loadingData && view === 'income' && (
-                                <div className="space-y-6">
-                                    <div className="flex flex-col sm:flex-row justify-between items-center gap-4 bg-white p-4 rounded-xl shadow-sm border border-slate-100">
-                                        <h2 className="text-xl font-bold text-slate-700 flex items-center gap-2"><i className="fa-solid fa-money-bill-wave text-emerald-500"></i> Control de Ingresos</h2>
-                                        <div className="flex items-center gap-2">
-                                            <label className="text-sm font-medium text-slate-500">Mes a consultar:</label>
-                                            <input type="month" value={incomeMonth} onChange={(e) => setIncomeMonth(e.target.value)} className="p-2 rounded-lg border border-slate-200 focus:ring-2 focus:ring-emerald-500 outline-none text-sm font-bold text-slate-700" />
-                                        </div>
-                                    </div>
-
-                                    <div className="bg-gradient-to-r from-emerald-500 to-teal-500 rounded-xl shadow-md p-8 text-white text-center">
-                                        <h3 className="text-emerald-100 font-medium mb-2 text-lg">Total Recibido este mes</h3>
-                                        <p className="text-5xl font-bold">S/ {depositsData.monthlyTotal.toFixed(2)}</p>
-                                    </div>
-
-                                    <div className="bg-white rounded-xl shadow-sm border border-slate-100 overflow-hidden">
-                                        <div className="p-4 bg-slate-50 border-b border-slate-100 flex justify-between items-center">
-                                            <h3 className="font-bold text-slate-700">Historial de Depósitos / Adelantos</h3>
-                                            <span className="bg-slate-200 text-slate-600 text-xs px-2 py-1 rounded-full font-bold">{depositsData.all.filter(d=>d.isCurrentMonth).length} registros en el mes</span>
-                                        </div>
-                                        <div className="overflow-x-auto">
-                                            <table className="w-full text-left border-collapse min-w-[600px]">
-                                                <thead>
-                                                    <tr className="bg-white text-slate-500 text-sm border-b border-slate-100">
-                                                        <th className="p-4 font-medium">Fecha</th>
-                                                        <th className="p-4 font-medium">Monto</th>
-                                                        <th className="p-4 font-medium">Cliente</th>
-                                                        <th className="p-4 font-medium">Actividad</th>
-                                                        <th className="p-4 font-medium">ID Orden</th>
-                                                    </tr>
-                                                </thead>
-                                                <tbody>
-                                                    {depositsData.all.length === 0 ? (
-                                                        <tr><td colSpan="5" className="p-8 text-center text-slate-500 italic">No hay depósitos registrados.</td></tr>
-                                                    ) : (
-                                                        depositsData.all.map((dep, idx) => (
-                                                            <tr key={idx} className={`border-b border-slate-50 transition-colors ${dep.isCurrentMonth ? 'bg-emerald-50/50 hover:bg-emerald-50' : 'opacity-50 hover:opacity-100'}`}>
-                                                                <td className="p-4 text-sm text-slate-600"><i className="fa-solid fa-calendar-day text-slate-400 mr-2"></i>{dep.fecha}</td>
-                                                                <td className="p-4 text-sm font-bold text-emerald-600">S/ {parseFloat(dep.monto).toFixed(2)}</td>
-                                                                <td className="p-4 text-sm text-slate-800 font-medium">{dep.cliente}</td>
-                                                                <td className="p-4 text-sm text-slate-600 truncate max-w-[200px]">{dep.actividad}</td>
-                                                                <td className="p-4 text-xs font-mono text-slate-400">{dep.ordenId}</td>
-                                                            </tr>
-                                                        ))
-                                                    )}
-                                                </tbody>
-                                            </table>
-                                        </div>
-                                    </div>
-                                </div>
-                            )}
                         </main>
                     </div>
                 </div>
